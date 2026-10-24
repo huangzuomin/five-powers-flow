@@ -18,46 +18,96 @@
     "state"
   ],
   "properties": {
-    "handoff_version": { "type": "integer", "const": 1 },
-    "kind": { "type": "string", "const": "DEV_HANDOFF" },
-    "task_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
-    "baseline_sha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
-    "tested_code_sha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
-    "handoff_evidence_sha": { "type": ["string", "null"] },
-    "pr_url": { "type": "string", "format": "uri" },
-    "scope": { "type": "string", "minLength": 5 },
+    "handoff_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "DEV_HANDOFF"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "baseline_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}$"
+    },
+    "tested_code_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}$"
+    },
+    "handoff_evidence_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pr_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 5
+    },
     "changed_files": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "minItems": 1
     },
     "dev_checks": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["command", "exit_code"],
+        "required": [
+          "command",
+          "exit_code"
+        ],
         "properties": {
-          "command": { "type": "string" },
-          "exit_code": { "type": "integer" },
-          "environment": { "type": "string" },
-          "raw_log_anchor": { "type": "string" }
+          "command": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "raw_log_anchor": {
+            "type": "string"
+          }
         }
       },
       "minItems": 1
     },
     "not_run": {
       "type": "array",
-      "items": { "type": "string" },
-      "minItems": 1,
-      "description": "Mandatory list of untested areas/boundaries. Empty list is strictly prohibited by anti-deception rules."
+      "items": {
+        "type": "string"
+      },
+      "description": "List of untested areas/boundaries. If empty, not_run_exemption_justification is mandatory."
     },
     "known_risks": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "state": {
       "type": "string",
-      "enum": ["DEV_READY_FOR_QA", "DEV_BLOCKED"]
+      "enum": [
+        "DEV_READY_FOR_QA",
+        "DEV_BLOCKED"
+      ]
+    },
+    "not_run_exemption_justification": {
+      "type": "string",
+      "minLength": 15,
+      "description": "Mandatory scope/matrix justification when claiming 100% boundary testing with empty not_run."
     }
   }
 }

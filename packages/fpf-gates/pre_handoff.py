@@ -93,13 +93,34 @@ def gate_3_project_map_anti_tamper(base_branch: str = "main") -> bool:
     return True
 
 
-def gate_4_sensitive_artifact_audit() -> bool:
-    """Gate 4: Scan uncommitted or newly added files for obvious secret leaks."""
-    code, out, _ = run_cmd(["git", "diff", "--name-only", "HEAD~1...HEAD"])
-    files_to_scan = [f.strip() for f in out.splitlines() if f.strip()] if (code == 0 and out) else []
+def gate_4_sensitive_artifact_audit(base_branch: str = "main") -> bool:
+    """Gate 4: Scan all branch-modified and staged files against base branch for secret leaks."""
+    # Check if base_branch exists; if not fallback to origin/main or HEAD~1
+    base_ref = base_branch
+    if run_cmd(["git", "rev-parse", "--verify", base_ref])[0] != 0:
+        base_ref = "origin/main"
+        if run_cmd(["git", "rev-parse", "--verify", base_ref])[0] != 0:
+            base_ref = "HEAD~1"
+
+    mb_code, mb_out, _ = run_cmd(["git", "merge-base", base_ref, "HEAD"])
+    merge_base = mb_out.strip() if (mb_code == 0 and mb_out.strip()) else base_ref
+
+    diff_code, out, err = run_cmd(["git", "diff", "--name-only", f"{merge_base}..HEAD"])
+    if diff_code != 0:
+        print(f"[FAIL Gate 4] Fail-closed: Cannot compute diff against '{merge_base}': {err}")
+        return False
+
+    files_to_scan = set(f.strip() for f in out.splitlines() if f.strip())
+
+    # Also include any uncommitted changes currently in working tree / index
+    stat_code, stat_out, _ = run_cmd(["git", "status", "--porcelain"])
+    if stat_code == 0 and stat_out:
+        for line in stat_out.splitlines():
+            if len(line) > 3:
+                files_to_scan.add(line[3:].strip())
 
     leaks_found = []
-    for filepath in files_to_scan:
+    for filepath in sorted(files_to_scan):
         p = Path(filepath)
         if not p.is_file():
             continue
@@ -112,12 +133,12 @@ def gate_4_sensitive_artifact_audit() -> bool:
             pass
 
     if leaks_found:
-        print("[FAIL Gate 4] Sensitive credential patterns detected in modified files:")
+        print("[FAIL Gate 4] Sensitive credential patterns detected in branch files:")
         for f, pat in leaks_found:
             print(f"  - File '{f}' matched secret pattern: {pat}")
         return False
 
-    print("[PASS Gate 4] Sensitive credential audit passed (zero obvious secrets detected).")
+    print(f"[PASS Gate 4] Sensitive credential audit passed across {len(files_to_scan)} file(s).")
     return True
 
 
@@ -142,7 +163,7 @@ def main() -> int:
     if not gate_3_project_map_anti_tamper(base_branch=args.base):
         success = False
 
-    if not gate_4_sensitive_artifact_audit():
+    if not gate_4_sensitive_artifact_audit(base_branch=args.base):
         success = False
 
     print("\n" + "="*40)

@@ -1,6 +1,6 @@
 # Five-Powers-Flow Specification (FPF-RFC-001)
 
-> **版本**：v1.2.0 (RFC Spec & Reference Implementation) · [变更历史](../CHANGELOG.md)  
+> **版本**：v1.2.1 (RFC Spec & Reference Implementation) · [变更历史](../CHANGELOG.md)  
 > **分类**：治理与工程协议标准  
 > **核心宪章**：$\text{DEV 交付} \neq \text{QA 通过} \neq \text{批准合并} \neq \text{批准部署}$  
 > **定位澄清**：本协议确立治理权力边界、不可伪造证据要求与状态机规范。本阶段为实验性参考规范，需配合服务端权限策略与可信验证器运行。

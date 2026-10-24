@@ -1,7 +1,7 @@
 # Five-Powers-Flow (FPF) ｜ 五权分立人机协同自治软件工程框架
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Specification](https://img.shields.io/badge/Spec-RFC--001%20v1.2-green.svg)](docs/SPECIFICATION.md)
+[![Specification](https://img.shields.io/badge/Spec-RFC--001%20v1.2.1-green.svg)](docs/SPECIFICATION.md)
 [![Status](https://img.shields.io/badge/Status-RFC%20Spec%20%26%20Reference%20Tooling-blue.svg)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -16,7 +16,7 @@
 当前绝大多数 AI 编程工具与多智能体框架在面对真实复杂的工业级生产项目时，普遍暴露了四大死穴：
 
 1. **自导自测与假阳性自欺**：同一个 Agent 既负责写代码，又负责跑测试，倾向于篡改测试用例或在纯内存 Mock 中宣告“全部通过”，掩盖了真实的集成缺陷与语法崩溃。
-2. **状态漂移与上下文爆炸**：单个长对话线程随着轮次增加迅速失去记忆或产生幻觉，缺乏唯一的、不可篡改的事实源（Single Source of Truth）。
+2. **状态漂移与上下文爆炸**：单个长对话线程随着轮次增加迅速失去记忆或产生幻觉，缺乏唯一的法定事实源（Single Source of Truth）。
 3. **环境污染与并发冲突**：多个 Agent 在同一个工作区直接修改文件，没有物理隔离的工作树与独立运行环境，测试遗留的脏数据与端口冲突频发。
 4. **责任主体缺位与失控越权**：要么陷入“每走一步都需要人类点确认”的高摩擦低效陷阱，要么走向“AI 擅自向主干推送甚至部署上线”的失控深渊。
 
@@ -30,7 +30,7 @@
 > **铁律**：如果分权只靠提示词告诉 LLM “你是 QA，请不要改代码”，那不是安全边界，那是祈祷。真正的隔离需要制度与物理上的**机械强制**。
 
 1. **工具集硬剔除**：在支持的平台（如 Claude Code `Explore`/`Plan` 子代理）中，直接剔除写操作工具（`Edit`/`Write`），使规划与监察角色在物理层面无法修改代码；
-2. **Pre-Push / Pre-Tool-Use 钩子拦截**：在本地 Git Hook 与工具调用层部署哨兵，**物理阻断任何研发工位（DEV）向 `PROJECT-MAP.md` 写入任何字节**（详见 [templates/git-hooks/pre-push.template](templates/git-hooks/pre-push.template)）；
+2. **Pre-Push / Pre-Tool-Use 钩子拦截**：在本地 Git Hook 与工具调用层部署哨兵，**通过客户端钩子与服务端 CODEOWNERS + CI 双层阻断研发工位（DEV）向 `PROJECT-MAP.md` 窜写**（详见 [templates/git-hooks/pre-push.template](templates/git-hooks/pre-push.template)）；
 3. **密码学 SHA 强一致性校验**：由中立校验脚本强制核对 `qa_card.tested_sha == dev_card.tested_code_sha`，且必须在 Git 对象库中物理存在（`git cat-file -e`），从代码层杜绝伪造验收。
 
 ---
@@ -44,7 +44,7 @@
                 │             GitHub (唯一法定事实源与总线)              │
                 ├────────────────────────────────────────────────────────┤
                 │  1. 跨异构 Agent 异步通信总线 (Issue/PR/Structured YAML)│
-                │  2. 不可篡改的证据链与 Git Commit 锚点 (40-digit SHA)  │
+                │  2. 防篡改密码学证据链与 Git Commit 锚点 (40-digit SHA)  │
                 │  3. 无数据库的公开状态机 (Labels & Lifecycle Tracking) │
                 │  4. 主权隔离与权限物理防火墙 (Branch Protection & Merge)│
                 │  5. 物理工位纯净克隆锚点 (Git Worktree Base)           │
@@ -149,7 +149,7 @@ five-powers-flow/
 │       ├── validate-schemas.yml        # CI: 契约语法元校验与边界测试
 │       └── validate-handoff-cards.yml  # CI: PR 交付卡密码学与作用域强校验
 ├── docs/
-│   ├── SPECIFICATION.md                # FPF-RFC-001 协议规范完整条令 (v1.2.0)
+│   ├── SPECIFICATION.md                # FPF-RFC-001 协议规范完整条令 (v1.2.1)
 │   ├── EVIDENCE-SPEC.md                # 32 项标准证据包规范 (四级分级 Profile)
 │   └── CLAUDE-CODE-GUIDE.md            # Claude Code 机械强制落地指南
 ├── schemas/                            # 机器可读的 JSON / YAML 契约规范 (Draft-07)

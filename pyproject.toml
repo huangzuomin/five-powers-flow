@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "five-powers-flow"
-version = "1.2.0"
+version = "1.2.1"
 description = "Separation-of-Powers Autonomous Software Engineering Framework for High-Assurance Multi-Agent Collaboration"
 readme = "README.md"
 authors = [{ name = "Five-Powers-Flow Contributors" }]

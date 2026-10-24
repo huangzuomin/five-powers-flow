@@ -1,7 +1,7 @@
 # FPF 32 项标准证据包规范 (32-Item Evidence Pack Specification)
 
 > **规范编号**：`FPF-SPEC-EVIDENCE-32`  
-> **所属协议**：FPF-RFC-001 v1.2.0  
+> **所属协议**：FPF-RFC-001 v1.2.1  
 > **核心原则**：口说无凭，无原始日志与外部哈希锚点一律判定为 `INVALID_TEST`。  
 > **反教条分级**：按切片类型划分 Profile，严禁为了凑数伪造无意义假动作。
 

@@ -2,14 +2,17 @@
 # -*- coding: utf-8 -*-
 """Five-Powers-Flow (FPF) Neutral Coordinator & Trusted Evaluator.
 
-RFC-001 v1.2 Implementation:
+RFC-001 v1.2.1 Hardened Reference Implementation:
 - Cryptographic Git Commit Verification (git cat-file -t == 'commit')
 - Strict Ancestor Check (baseline_sha is ancestor of tested_code_sha)
 - Accurate Change Scope Audit (changed_files contains all actual diff files)
 - Two-Way Handshake Enforcement (DEV.tested_code_sha == QA.tested_sha)
 - Two-Way QA Toolchain Verification (runner_sha & qa_contract_sha must be valid commits)
-- Anti-Cheat not_run Enforcement (No self-signed bypasses; must have at least 1 declared item)
-- Disk-backed Manifest & Item SHA-256 Recalculation (--evidence-dir)
+- Anti-Cheat not_run / Exemption Matrix Enforcement
+- Evidence Profile Enforcement (Profile-specific mandatory evidence verification)
+- Checks Exit Code Verification (PASS requires exit_code == 0 on all executed checks)
+- Disk-backed Manifest & Item SHA-256 Recalculation (Mandatory for verdict: PASS)
+- Fail-Closed State Machine & Cryptographic Merge Ancestry Verification
 - Automated Extraction from PR/Issue bodies (extract_yaml_block active)
 """
 from __future__ import annotations
@@ -28,6 +31,13 @@ import yaml
 
 HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 HEX_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+REQUIRED_PROFILE_EVIDENCES: Dict[str, List[str]] = {
+    "Library": ["EVID-01", "EVID-04", "EVID-09"],
+    "API-DB": ["EVID-01", "EVID-02", "EVID-04", "EVID-05", "EVID-09"],
+    "Full-Stack": ["EVID-01", "EVID-02", "EVID-03", "EVID-04", "EVID-09"],
+    "Rework": ["EVID-01", "EVID-04", "EVID-09", "EVID-25"],
+}
 
 
 def run_cmd(cmd: List[str], cwd: Optional[Path] = None, timeout: int = 15) -> Tuple[int, str, str]:
@@ -69,8 +79,12 @@ def recalculate_manifest_sha256(manifest_path: Path) -> Tuple[bool, str]:
         return False, str(exc)
 
 
-def verify_evidence_directory(evidence_dir: Path, claimed_manifest_sha: str) -> List[str]:
-    """Verify manifest file SHA-256 and all individual EVID items listed in manifest."""
+def verify_evidence_directory(
+    evidence_dir: Path,
+    claimed_manifest_sha: str,
+    profile: Optional[str] = "Library",
+) -> List[str]:
+    """Verify manifest file SHA-256, all individual EVID items, and profile coverage."""
     errors = []
     manifest_p = evidence_dir / "manifest.json"
     if not manifest_p.is_file():
@@ -88,21 +102,40 @@ def verify_evidence_directory(evidence_dir: Path, claimed_manifest_sha: str) -> 
     try:
         manifest_data = json.loads(manifest_p.read_text(encoding="utf-8"))
         items = manifest_data.get("items", [])
+        if not isinstance(items, list) or len(items) == 0:
+            errors.append("Evidence manifest.json 'items' list cannot be empty! Zero evidence items cannot substantiate QA.")
+            return errors
+
+        target_profile = str(profile or "Library").strip()
+        if target_profile not in REQUIRED_PROFILE_EVIDENCES:
+            target_profile = "Library"
+
+        required_evids = REQUIRED_PROFILE_EVIDENCES[target_profile]
+        declared_evid_ids = set()
+
         for item in items:
-            evid_id = item.get("id", "UNKNOWN")
+            evid_id = str(item.get("id", "UNKNOWN")).strip()
+            declared_evid_ids.add(evid_id)
             rel_path = item.get("path")
             expected_sha = item.get("sha256")
             if not rel_path or not expected_sha:
+                errors.append(f"{evid_id}: Manifest item missing 'path' or 'sha256'")
                 continue
             item_file = evidence_dir / rel_path
             if not item_file.is_file():
-                errors.append(f"{evid_id}: Missing evidence file '{rel_path}'")
+                errors.append(f"{evid_id}: Missing physical evidence file '{rel_path}'")
                 continue
             item_hash = hashlib.sha256(item_file.read_bytes()).hexdigest().lower()
             if item_hash != str(expected_sha).lower():
                 errors.append(
                     f"{evid_id}: Evidence SHA-256 mismatch for '{rel_path}'. Declared: {expected_sha}, Actual: {item_hash}"
                 )
+
+        missing_profile_evids = set(required_evids) - declared_evid_ids
+        if missing_profile_evids:
+            errors.append(
+                f"Evidence manifest for profile '{target_profile}' omitted mandatory evidence items: {sorted(missing_profile_evids)}"
+            )
     except Exception as exc:
         errors.append(f"Failed to parse or verify manifest.json: {exc}")
 
@@ -113,7 +146,6 @@ def extract_yaml_block(text: str, marker: str = "DEV_HANDOFF") -> str:
     """Extract standard YAML blocks enclosed in ```yaml ... ``` from text."""
     if not text:
         return ""
-    # Pattern matching code fence containing specified kind
     pattern = re.compile(rf"```ya?ml\s*([\s\S]*?kind:\s*{marker}[\s\S]*?)```", re.IGNORECASE)
     match = pattern.search(text)
     if match:
@@ -142,14 +174,12 @@ def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None)
     elif repo_path and not git_is_commit_object(tested_sha, repo_path):
         errors.append(f"tested_code_sha '{tested_sha}' is NOT a valid commit object in git repository!")
 
-    # Issue #3 Fix: 验证 baseline 必须是 tested_code_sha 的祖先
     if repo_path and HEX_SHA_RE.match(baseline_sha) and HEX_SHA_RE.match(tested_sha):
         if git_is_commit_object(baseline_sha, repo_path) and git_is_commit_object(tested_sha, repo_path):
             code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor", baseline_sha, tested_sha], cwd=repo_path)
             if code != 0:
                 errors.append(f"baseline_sha ({baseline_sha}) is NOT an ancestor of tested_code_sha ({tested_sha})!")
 
-            # 校验 changed_files 与真实 git diff
             diff_code, diff_out, _ = run_cmd(["git", "diff", "--name-only", f"{baseline_sha}..{tested_sha}"], cwd=repo_path)
             if diff_code == 0:
                 actual_diff_files = set(f.strip() for f in diff_out.splitlines() if f.strip())
@@ -162,10 +192,17 @@ def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None)
     if not isinstance(changed_files, list) or not changed_files:
         errors.append("changed_files must be a non-empty list of file paths")
 
-    # Issue #2 Fix: 彻底删除 full_coverage_certified 后门，强制 not_run 必须至少有一项
+    # P2-1 Fix: not_run 必须为列表；若为空，则必须提供详细的 not_run_exemption_justification
     not_run = data.get("not_run")
-    if not isinstance(not_run, list) or len(not_run) == 0:
-        errors.append("not_run must be a non-empty list declaring untested boundaries (anti-deception rule)")
+    not_run_exemption = str(data.get("not_run_exemption_justification", "")).strip()
+    if not isinstance(not_run, list):
+        errors.append("not_run must be explicitly declared as a list of untested areas/boundaries")
+    elif len(not_run) == 0:
+        if len(not_run_exemption) < 15:
+            errors.append(
+                "not_run is empty. Under FPF anti-deception rules, if claiming 100% boundary testing with zero untested areas, "
+                "you must provide an explicit 'not_run_exemption_justification' (minimum 15 characters) citing test matrix / scope evidence."
+            )
 
     dev_checks = data.get("dev_checks")
     if not isinstance(dev_checks, list) or not dev_checks:
@@ -205,7 +242,6 @@ def validate_qa_result(
     elif repo_path and not git_is_commit_object(tested_sha, repo_path):
         errors.append(f"QA tested_sha '{tested_sha}' is NOT a valid commit object in git repository!")
 
-    # Issue #4 Fix: runner_sha & qa_contract_sha 必填、格式与存在性强校验
     runner_sha = str(qa_data.get("runner_sha", "")).strip()
     if not HEX_SHA_RE.match(runner_sha):
         errors.append(f"runner_sha must be a 40-digit hex SHA, got: '{runner_sha}'")
@@ -218,7 +254,6 @@ def validate_qa_result(
     elif repo_path and not git_is_commit_object(qa_contract_sha, repo_path):
         errors.append(f"qa_contract_sha '{qa_contract_sha}' does not exist as a commit in git repository!")
 
-    # 强制与 DEV 卡片 SHA 一致
     if dev_data:
         dev_tested_sha = str(dev_data.get("tested_code_sha", "")).strip()
         if tested_sha != dev_tested_sha:
@@ -226,27 +261,40 @@ def validate_qa_result(
     else:
         errors.append("CRITICAL: QA_RESULT cannot be validated in isolation without matching DEV_HANDOFF!")
 
-    # Issue #5 Fix: 真实读取物理目录重算 manifest 及各证据项 SHA
+    verdict = str(qa_data.get("verdict", "")).strip()
+    if verdict not in ("PASS", "FAIL", "BLOCKED", "NOT_RUN", "INVALID_TEST"):
+        errors.append(f"Invalid QA verdict value: '{verdict}'")
+
+    # P0-03 Fix 1: PASS 裁决必须提供物理证据目录，严禁纯字符串口头通过
+    if verdict == "PASS" and not evidence_dir:
+        errors.append("CRITICAL: QA verdict 'PASS' strictly requires physical evidence directory (--evidence-dir). String-only PASS verification is prohibited.")
+
     claimed_manifest_sha = str(qa_data.get("evidence_manifest_sha256", "")).strip().lower()
     if not HEX_SHA256_RE.match(claimed_manifest_sha):
         errors.append(f"evidence_manifest_sha256 must be a 64-digit hex string, got: '{claimed_manifest_sha}'")
     elif evidence_dir:
-        evidence_errors = verify_evidence_directory(evidence_dir, claimed_manifest_sha)
+        profile = qa_data.get("profile", "Library")
+        evidence_errors = verify_evidence_directory(evidence_dir, claimed_manifest_sha, profile=profile)
         errors.extend(evidence_errors)
 
+    # P0-03 Fix 2: 校验 checks 实际执行项与退出码，非零退出码严禁标 PASS
     checks = qa_data.get("checks")
     if not isinstance(checks, list) or len(checks) == 0:
         errors.append("QA card must include at least one executed check item in 'checks'")
+    else:
+        for chk in checks:
+            chk_name = chk.get("name") or chk.get("command") or "unnamed_check"
+            code = chk.get("exit_code")
+            if code is None:
+                errors.append(f"QA check item '{chk_name}' missing exit_code field")
+            elif code != 0 and verdict == "PASS":
+                errors.append(f"CRITICAL REJECTION: QA check '{chk_name}' failed with exit_code {code}. Verdict cannot be PASS!")
 
     findings = qa_data.get("findings", {})
     if isinstance(findings, dict):
         p0_findings = findings.get("p0", [])
-        if isinstance(p0_findings, list) and len(p0_findings) > 0 and qa_data.get("verdict") == "PASS":
+        if isinstance(p0_findings, list) and len(p0_findings) > 0 and verdict == "PASS":
             errors.append(f"CRITICAL REJECTION: QA card claims PASS but contains unresolved P0 findings: {p0_findings}")
-
-    verdict = qa_data.get("verdict")
-    if verdict not in ("PASS", "FAIL", "BLOCKED", "NOT_RUN", "INVALID_TEST"):
-        errors.append(f"Invalid QA verdict value: '{verdict}'")
 
     return errors
 
@@ -257,18 +305,31 @@ def compute_lifecycle_state(
     dev_errors: List[str],
     qa_errors: List[str],
     pr_merged: bool = False,
+    repo_path: Optional[Path] = None,
 ) -> Tuple[str, str]:
     """Compute (not blindly trust) the authoritative lifecycle state."""
-    # Issue #11.1 Fix: 支持 pr_merged 可达
-    if pr_merged:
-        return "MERGED_AND_CLOSED", "PR is confirmed merged into main branch."
-
+    # P0-04 Fix: 任何错误优先 Fail-Closed，绝不被任何外部标记跳过
     if dev_errors:
         return "DEV_REJECTED", f"DEV_HANDOFF failed validation with {len(dev_errors)} error(s)."
 
+    if qa_errors:
+        return "QA_REJECTED", f"QA_RESULT failed verification with {len(qa_errors)} error(s). Marked INVALID_TEST."
+
+    # P0-04 Fix: 终态流转需要前序验证全绿，且在传入仓库时检验 tested_sha 真正汇入主干
+    if pr_merged:
+        if not qa_data or qa_data.get("verdict") != "PASS":
+            return "QA_REJECTED", "Cannot mark MERGED_AND_CLOSED without an authenticated, passing QA_RESULT."
+        tested_sha = str(qa_data.get("tested_sha", "")).strip()
+        if repo_path and tested_sha:
+            base_ref = "origin/main"
+            if run_cmd(["git", "rev-parse", "--verify", base_ref], cwd=repo_path)[0] != 0:
+                base_ref = "main"
+            anc_code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor", tested_sha, base_ref], cwd=repo_path)
+            if anc_code != 0:
+                return "MERGE_UNVERIFIED", f"PR merge asserted, but tested_sha '{tested_sha}' is NOT an ancestor of branch '{base_ref}'!"
+        return "MERGED_AND_CLOSED", "PR is verified merged into main branch with cryptographic ancestry."
+
     if qa_data:
-        if qa_errors:
-            return "QA_REJECTED", f"QA_RESULT failed verification with {len(qa_errors)} error(s). Marked INVALID_TEST."
         verdict = qa_data.get("verdict")
         if verdict == "PASS":
             return "QA_PASSED_AWAITING_OWNER_MERGE", "QA verified and passed. Awaiting human sovereign merge decision."
@@ -297,7 +358,6 @@ def load_card_input(file_arg: Optional[str], text_arg: Optional[str], marker: st
             sys.exit(f"[FAIL] Card file not found: {file_arg}")
         return yaml.safe_load(p.read_text(encoding="utf-8"))
     if text_arg:
-        # Issue #9 Fix: 真正调用 extract_yaml_block 从 PR/Issue 文本中提取
         block = extract_yaml_block(text_arg, marker=marker)
         if not block:
             sys.exit(f"[FAIL] No ```yaml ... kind: {marker} ... ``` block found in provided text.")
@@ -306,21 +366,21 @@ def load_card_input(file_arg: Optional[str], text_arg: Optional[str], marker: st
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Five-Powers-Flow Trusted Evaluator & Coordinator v1.2")
+    parser = argparse.ArgumentParser(description="Five-Powers-Flow Trusted Evaluator & Coordinator v1.2.1")
     parser.add_argument("--dev-card", help="Path to YAML file containing DEV_HANDOFF")
     parser.add_argument("--dev-text", help="Raw text (PR body) containing a DEV_HANDOFF code block")
     parser.add_argument("--qa-card", help="Path to YAML file containing QA_RESULT")
     parser.add_argument("--qa-text", help="Raw text (Issue comment) containing a QA_RESULT code block")
     parser.add_argument("--evidence-dir", help="Path to evidence directory containing manifest.json")
     parser.add_argument("--check-git", action="store_true", help="Physically verify commit objects in local git tree")
-    parser.add_argument("--pr-merged", action="store_true", help="Mark PR as verified merged in repository")
+    parser.add_argument("--pr-merged", action="store_true", help="Assert PR is merged into main branch (verified via git)")
     args = parser.parse_args()
 
     repo_path = Path.cwd() if args.check_git else None
     dev_errors = []
     qa_errors = []
 
-    print("=== [FPF Trusted Evaluator Engine v1.2] ===\n")
+    print("=== [FPF Trusted Evaluator Engine v1.2.1] ===\n")
 
     dev_data = load_card_input(args.dev_card, args.dev_text, "DEV_HANDOFF")
     if dev_data:
@@ -348,7 +408,14 @@ def main() -> int:
         else:
             print("[PASS] QA_RESULT is cryptographically and structurally valid.")
 
-    state, reason = compute_lifecycle_state(dev_data, qa_data, dev_errors, qa_errors, pr_merged=args.pr_merged)
+    state, reason = compute_lifecycle_state(
+        dev_data,
+        qa_data,
+        dev_errors,
+        qa_errors,
+        pr_merged=args.pr_merged,
+        repo_path=repo_path,
+    )
     print(f"\n[Computed Lifecycle State] => {state}")
     print(f"[Reason]                   => {reason}\n")
 
