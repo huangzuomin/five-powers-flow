@@ -1,6 +1,6 @@
 # FPF 在 Claude Code 中的工程落地指南 (Claude Code Implementation Guide)
 
-> **版本**：v1.1.0  
+> **版本**：v1.2.0  
 > **核心原则**：分权制衡若只依赖提示词（Prompting），就是把安全建立在“祈祷”之上。  
 > Claude Code 提供了原生只读子代理工具集硬剔除与 `PreToolUse` Hook 机制，可将 FPF 协议从“道德倡议”升级为“机械强制”（Mechanical Enforcement）。
 

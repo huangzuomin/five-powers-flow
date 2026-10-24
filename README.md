@@ -1,7 +1,7 @@
 # Five-Powers-Flow (FPF) ｜ 五权分立人机协同自治软件工程框架
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Specification](https://img.shields.io/badge/Spec-RFC--001%20v1.1-green.svg)](docs/SPECIFICATION.md)
+[![Specification](https://img.shields.io/badge/Spec-RFC--001%20v1.2-green.svg)](docs/SPECIFICATION.md)
 [![Status](https://img.shields.io/badge/Status-RFC%20Spec%20%26%20Reference%20Tooling-blue.svg)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -136,29 +136,38 @@ python packages/fpf-coordinator/coordinator.py --dev-card dev_handoff.yaml --qa-
 
 ```text
 five-powers-flow/
-├── README.md                           # 本说明文档
+├── README.md                           # 框架主说明文档
+├── CHANGELOG.md                        # 语义化版本变更历史 (Keep a Changelog)
+├── pyproject.toml                      # 现代化 Python 构建与测试工程元数据
 ├── LICENSE                             # Apache 2.0 开源许可证
 ├── CONTRIBUTING.md                     # 开源贡献指南
 ├── CODE_OF_CONDUCT.md                  # 行为准则
 ├── SECURITY.md                         # 安全策略
+├── .github/
+│   ├── CODEOWNERS                      # 服务端治理文档所有权硬锁定
+│   └── workflows/
+│       ├── validate-schemas.yml        # CI: 契约语法元校验与边界测试
+│       └── validate-handoff-cards.yml  # CI: PR 交付卡密码学与作用域强校验
 ├── docs/
-│   ├── SPECIFICATION.md                # FPF-RFC-001 协议规范完整条令
-│   ├── EVIDENCE-SPEC.md                # 32 项标准证据包规范
+│   ├── SPECIFICATION.md                # FPF-RFC-001 协议规范完整条令 (v1.2.0)
+│   ├── EVIDENCE-SPEC.md                # 32 项标准证据包规范 (四级分级 Profile)
 │   └── CLAUDE-CODE-GUIDE.md            # Claude Code 机械强制落地指南
-├── schemas/                            # 机器可读的 JSON / YAML 契约规范
+├── schemas/                            # 机器可读的 JSON / YAML 契约规范 (Draft-07)
 │   ├── work-order.schema.json          # 架构工作令 Schema
-│   ├── dev-handoff.schema.json         # 研发交付卡 Schema
-│   ├── qa-result.schema.json           # 质检裁决卡 Schema
+│   ├── dev-handoff.schema.json         # 研发交付卡 Schema (含 minItems 强制)
+│   ├── qa-result.schema.json           # 质检裁决卡 Schema (强制 runner/contract SHA)
 │   └── coordination-ledger.schema.json # 调度协调账本 Schema
 ├── templates/                          # 开箱即用的项目模板套件
 │   ├── AGENTS.md.template              # 通用仓库智能体红线规范
 │   ├── PROJECT-MAP.md.template         # 单一项目地图模板
 │   ├── LESSONS.md.template             # 错题本制度模板
 │   ├── HANDOFF-PROTOCOL.md.template    # 项目交接协议模板
-│   └── git-hooks/pre-push.template     # 物理防窜写 Git 推送拦截钩子
+│   └── git-hooks/pre-push.template     # 物理防窜写 Git 推送拦截钩子 (merge-base 强化)
+├── tests/
+│   └── test_trusted_evaluator.py       # 密码学断言与安全边界单元测试套件
 └── packages/                           # 核心门禁与验证器实现
-    ├── fpf-coordinator/coordinator.py  # 协调器与密码学 SHA 一致性强校验器
-    └── fpf-gates/pre_handoff.py        # 交付前四道机械门禁检查器
+    ├── fpf-coordinator/coordinator.py  # 协调器与密码学 SHA/作用域/证据包强校验器
+    └── fpf-gates/pre_handoff.py        # 交付前四道机械门禁检查器 (含敏感产物审计)
 ```
 
 ---

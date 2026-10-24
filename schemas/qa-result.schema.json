@@ -9,6 +9,7 @@
     "task_id",
     "tested_sha",
     "runner_sha",
+    "qa_contract_sha",
     "environment",
     "verdict",
     "checks",
@@ -22,7 +23,7 @@
     "task_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
     "tested_sha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
     "runner_sha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
-    "qa_contract_sha": { "type": "string" },
+    "qa_contract_sha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
     "environment": { "type": "string", "minLength": 5 },
     "verdict": {
       "type": "string",
@@ -37,7 +38,8 @@
           "name": { "type": "string" },
           "exit_code": { "type": "integer" }
         }
-      }
+      },
+      "minItems": 1
     },
     "evidence_manifest_sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
     "findings": {

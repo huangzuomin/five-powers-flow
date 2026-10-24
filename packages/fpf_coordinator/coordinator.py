@@ -2,17 +2,22 @@
 # -*- coding: utf-8 -*-
 """Five-Powers-Flow (FPF) Neutral Coordinator & Trusted Evaluator.
 
-RFC-001 v1.1 Implementation:
-1. Cryptographic Git Commit Verification (git cat-file -t == 'commit')
-2. Two-Way Handshake Enforcement (DEV.tested_code_sha == QA.tested_sha)
-3. Computed Verdict (Never blindly trust claimed PASS; evaluate real checks & p0 findings)
-4. Local Manifest SHA-256 Recalculation (Anti-tamper evidence auditing)
-5. Strict Fail-Closed Boundaries
+RFC-001 v1.2 Implementation:
+- Cryptographic Git Commit Verification (git cat-file -t == 'commit')
+- Strict Ancestor Check (baseline_sha is ancestor of tested_code_sha)
+- Accurate Change Scope Audit (changed_files contains all actual diff files)
+- Two-Way Handshake Enforcement (DEV.tested_code_sha == QA.tested_sha)
+- Two-Way QA Toolchain Verification (runner_sha & qa_contract_sha must be valid commits)
+- Anti-Cheat not_run Enforcement (No self-signed bypasses; must have at least 1 declared item)
+- Disk-backed Manifest & Item SHA-256 Recalculation (--evidence-dir)
+- Automated Extraction from PR/Issue bodies (extract_yaml_block active)
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -46,7 +51,6 @@ def git_is_commit_object(sha: str, repo_path: Optional[Path] = None) -> bool:
     """Verify that a 40-digit SHA physically exists AND is strictly a 'commit' object."""
     if not HEX_SHA_RE.match(sha):
         return False
-    # P0-04 Fix: Must check object TYPE, not just existence (-e allows blob/tree)
     code, stdout, _ = run_cmd(["git", "cat-file", "-t", sha], cwd=repo_path)
     return code == 0 and stdout == "commit"
 
@@ -65,6 +69,58 @@ def recalculate_manifest_sha256(manifest_path: Path) -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def verify_evidence_directory(evidence_dir: Path, claimed_manifest_sha: str) -> List[str]:
+    """Verify manifest file SHA-256 and all individual EVID items listed in manifest."""
+    errors = []
+    manifest_p = evidence_dir / "manifest.json"
+    if not manifest_p.is_file():
+        return [f"Evidence manifest missing: {manifest_p}"]
+
+    ok, actual_sha = recalculate_manifest_sha256(manifest_p)
+    if not ok:
+        return [f"Cannot read manifest file: {actual_sha}"]
+    if actual_sha != claimed_manifest_sha.lower():
+        errors.append(
+            f"MANIFEST HASH MISMATCH! Claimed: '{claimed_manifest_sha}', Recomputed: '{actual_sha}'"
+        )
+        return errors
+
+    try:
+        manifest_data = json.loads(manifest_p.read_text(encoding="utf-8"))
+        items = manifest_data.get("items", [])
+        for item in items:
+            evid_id = item.get("id", "UNKNOWN")
+            rel_path = item.get("path")
+            expected_sha = item.get("sha256")
+            if not rel_path or not expected_sha:
+                continue
+            item_file = evidence_dir / rel_path
+            if not item_file.is_file():
+                errors.append(f"{evid_id}: Missing evidence file '{rel_path}'")
+                continue
+            item_hash = hashlib.sha256(item_file.read_bytes()).hexdigest().lower()
+            if item_hash != str(expected_sha).lower():
+                errors.append(
+                    f"{evid_id}: Evidence SHA-256 mismatch for '{rel_path}'. Declared: {expected_sha}, Actual: {item_hash}"
+                )
+    except Exception as exc:
+        errors.append(f"Failed to parse or verify manifest.json: {exc}")
+
+    return errors
+
+
+def extract_yaml_block(text: str, marker: str = "DEV_HANDOFF") -> str:
+    """Extract standard YAML blocks enclosed in ```yaml ... ``` from text."""
+    if not text:
+        return ""
+    # Pattern matching code fence containing specified kind
+    pattern = re.compile(rf"```ya?ml\s*([\s\S]*?kind:\s*{marker}[\s\S]*?)```", re.IGNORECASE)
+    match = pattern.search(text)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
 def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None) -> List[str]:
     """Cryptographically and structurally validate DEV_HANDOFF card."""
     errors = []
@@ -77,6 +133,8 @@ def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None)
     baseline_sha = str(data.get("baseline_sha", "")).strip()
     if not HEX_SHA_RE.match(baseline_sha):
         errors.append(f"baseline_sha must be a 40-digit hex SHA, got: '{baseline_sha}'")
+    elif repo_path and not git_is_commit_object(baseline_sha, repo_path):
+        errors.append(f"baseline_sha '{baseline_sha}' is NOT a valid commit object in git repository!")
 
     tested_sha = str(data.get("tested_code_sha", "")).strip()
     if not HEX_SHA_RE.match(tested_sha):
@@ -84,15 +142,30 @@ def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None)
     elif repo_path and not git_is_commit_object(tested_sha, repo_path):
         errors.append(f"tested_code_sha '{tested_sha}' is NOT a valid commit object in git repository!")
 
+    # Issue #3 Fix: 验证 baseline 必须是 tested_code_sha 的祖先
+    if repo_path and HEX_SHA_RE.match(baseline_sha) and HEX_SHA_RE.match(tested_sha):
+        if git_is_commit_object(baseline_sha, repo_path) and git_is_commit_object(tested_sha, repo_path):
+            code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor", baseline_sha, tested_sha], cwd=repo_path)
+            if code != 0:
+                errors.append(f"baseline_sha ({baseline_sha}) is NOT an ancestor of tested_code_sha ({tested_sha})!")
+
+            # 校验 changed_files 与真实 git diff
+            diff_code, diff_out, _ = run_cmd(["git", "diff", "--name-only", f"{baseline_sha}..{tested_sha}"], cwd=repo_path)
+            if diff_code == 0:
+                actual_diff_files = set(f.strip() for f in diff_out.splitlines() if f.strip())
+                declared_files = set(str(f).strip() for f in data.get("changed_files", []))
+                missing_files = actual_diff_files - declared_files
+                if missing_files:
+                    errors.append(f"changed_files omitted {len(missing_files)} actual diff file(s): {sorted(missing_files)[:5]}")
+
     changed_files = data.get("changed_files")
     if not isinstance(changed_files, list) or not changed_files:
         errors.append("changed_files must be a non-empty list of file paths")
 
+    # Issue #2 Fix: 彻底删除 full_coverage_certified 后门，强制 not_run 必须至少有一项
     not_run = data.get("not_run")
-    if not isinstance(not_run, list):
-        errors.append("not_run must be explicitly declared as a list")
-    elif len(not_run) == 0 and not data.get("full_coverage_certified"):
-        errors.append("not_run cannot be an empty list without explicit 'full_coverage_certified: true'")
+    if not isinstance(not_run, list) or len(not_run) == 0:
+        errors.append("not_run must be a non-empty list declaring untested boundaries (anti-deception rule)")
 
     dev_checks = data.get("dev_checks")
     if not isinstance(dev_checks, list) or not dev_checks:
@@ -105,7 +178,7 @@ def validate_qa_result(
     qa_data: Dict[str, Any],
     dev_data: Optional[Dict[str, Any]] = None,
     repo_path: Optional[Path] = None,
-    evidence_manifest_path: Optional[Path] = None,
+    evidence_dir: Optional[Path] = None,
 ) -> List[str]:
     """Cryptographically validate QA_RESULT card and enforce verification against DEV."""
     errors = []
@@ -115,6 +188,7 @@ def validate_qa_result(
         "task_id",
         "tested_sha",
         "runner_sha",
+        "qa_contract_sha",
         "environment",
         "verdict",
         "checks",
@@ -122,7 +196,7 @@ def validate_qa_result(
     ]
     for field in required_scalars:
         val = qa_data.get(field)
-        if val is None or val == "":
+        if val is None or str(val).strip() == "":
             errors.append(f"QA card missing required field: '{field}'")
 
     tested_sha = str(qa_data.get("tested_sha", "")).strip()
@@ -131,7 +205,20 @@ def validate_qa_result(
     elif repo_path and not git_is_commit_object(tested_sha, repo_path):
         errors.append(f"QA tested_sha '{tested_sha}' is NOT a valid commit object in git repository!")
 
-    # P0-03 & P0-04 Fix: 强制两两对齐，绝不允许凭空接受 QA 卡
+    # Issue #4 Fix: runner_sha & qa_contract_sha 必填、格式与存在性强校验
+    runner_sha = str(qa_data.get("runner_sha", "")).strip()
+    if not HEX_SHA_RE.match(runner_sha):
+        errors.append(f"runner_sha must be a 40-digit hex SHA, got: '{runner_sha}'")
+    elif repo_path and not git_is_commit_object(runner_sha, repo_path):
+        errors.append(f"runner_sha '{runner_sha}' does not exist as a commit in git repository!")
+
+    qa_contract_sha = str(qa_data.get("qa_contract_sha", "")).strip()
+    if not HEX_SHA_RE.match(qa_contract_sha):
+        errors.append(f"qa_contract_sha must be a 40-digit hex SHA, got: '{qa_contract_sha}'")
+    elif repo_path and not git_is_commit_object(qa_contract_sha, repo_path):
+        errors.append(f"qa_contract_sha '{qa_contract_sha}' does not exist as a commit in git repository!")
+
+    # 强制与 DEV 卡片 SHA 一致
     if dev_data:
         dev_tested_sha = str(dev_data.get("tested_code_sha", "")).strip()
         if tested_sha != dev_tested_sha:
@@ -139,25 +226,18 @@ def validate_qa_result(
     else:
         errors.append("CRITICAL: QA_RESULT cannot be validated in isolation without matching DEV_HANDOFF!")
 
-    # P0-04 Fix: 真实读取物理文件并重新计算 SHA-256，而不是光看字符串
+    # Issue #5 Fix: 真实读取物理目录重算 manifest 及各证据项 SHA
     claimed_manifest_sha = str(qa_data.get("evidence_manifest_sha256", "")).strip().lower()
     if not HEX_SHA256_RE.match(claimed_manifest_sha):
         errors.append(f"evidence_manifest_sha256 must be a 64-digit hex string, got: '{claimed_manifest_sha}'")
-    elif evidence_manifest_path:
-        ok, recomputed_sha = recalculate_manifest_sha256(evidence_manifest_path)
-        if not ok:
-            errors.append(f"Failed to read evidence manifest for hash verification: {recomputed_sha}")
-        elif recomputed_sha != claimed_manifest_sha:
-            errors.append(
-                f"MANIFEST HASH MISMATCH! Claimed: '{claimed_manifest_sha}', Recomputed from disk: '{recomputed_sha}'"
-            )
+    elif evidence_dir:
+        evidence_errors = verify_evidence_directory(evidence_dir, claimed_manifest_sha)
+        errors.extend(evidence_errors)
 
-    # P0-03 Fix: 检查 checks 实际执行项
     checks = qa_data.get("checks")
     if not isinstance(checks, list) or len(checks) == 0:
         errors.append("QA card must include at least one executed check item in 'checks'")
 
-    # P0-03 Fix: 检查是否有未解决的 P0 级严重缺陷，有则严禁标 PASS
     findings = qa_data.get("findings", {})
     if isinstance(findings, dict):
         p0_findings = findings.get("p0", [])
@@ -179,8 +259,9 @@ def compute_lifecycle_state(
     pr_merged: bool = False,
 ) -> Tuple[str, str]:
     """Compute (not blindly trust) the authoritative lifecycle state."""
+    # Issue #11.1 Fix: 支持 pr_merged 可达
     if pr_merged:
-        return "MERGED_AND_CLOSED", "PR is confirmed merged in repository."
+        return "MERGED_AND_CLOSED", "PR is confirmed merged into main branch."
 
     if dev_errors:
         return "DEV_REJECTED", f"DEV_HANDOFF failed validation with {len(dev_errors)} error(s)."
@@ -206,29 +287,43 @@ def compute_lifecycle_state(
     return "DEV_IN_PROGRESS", "Development in progress."
 
 
+def load_card_input(file_arg: Optional[str], text_arg: Optional[str], marker: str) -> Optional[Dict[str, Any]]:
+    """Load and parse YAML card from either file path or raw body text using extract_yaml_block."""
+    if file_arg and text_arg:
+        sys.exit(f"[FAIL] Cannot specify both --{marker.lower().replace('_', '-')}-card and --{marker.lower().replace('_', '-')}-text")
+    if file_arg:
+        p = Path(file_arg)
+        if not p.is_file():
+            sys.exit(f"[FAIL] Card file not found: {file_arg}")
+        return yaml.safe_load(p.read_text(encoding="utf-8"))
+    if text_arg:
+        # Issue #9 Fix: 真正调用 extract_yaml_block 从 PR/Issue 文本中提取
+        block = extract_yaml_block(text_arg, marker=marker)
+        if not block:
+            sys.exit(f"[FAIL] No ```yaml ... kind: {marker} ... ``` block found in provided text.")
+        return yaml.safe_load(block)
+    return None
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Five-Powers-Flow Trusted Evaluator & Coordinator")
+    parser = argparse.ArgumentParser(description="Five-Powers-Flow Trusted Evaluator & Coordinator v1.2")
     parser.add_argument("--dev-card", help="Path to YAML file containing DEV_HANDOFF")
+    parser.add_argument("--dev-text", help="Raw text (PR body) containing a DEV_HANDOFF code block")
     parser.add_argument("--qa-card", help="Path to YAML file containing QA_RESULT")
-    parser.add_argument("--manifest", help="Path to physical evidence manifest.json to verify SHA-256")
+    parser.add_argument("--qa-text", help="Raw text (Issue comment) containing a QA_RESULT code block")
+    parser.add_argument("--evidence-dir", help="Path to evidence directory containing manifest.json")
     parser.add_argument("--check-git", action="store_true", help="Physically verify commit objects in local git tree")
+    parser.add_argument("--pr-merged", action="store_true", help="Mark PR as verified merged in repository")
     args = parser.parse_args()
 
     repo_path = Path.cwd() if args.check_git else None
-    dev_data = None
-    qa_data = None
     dev_errors = []
     qa_errors = []
 
-    print("=== [FPF Trusted Evaluator Engine v1.1] ===\n")
+    print("=== [FPF Trusted Evaluator Engine v1.2] ===\n")
 
-    if args.dev_card:
-        p = Path(args.dev_card)
-        if not p.is_file():
-            print(f"[FAIL] DEV card file not found: {args.dev_card}")
-            return 1
-        with open(p, "r", encoding="utf-8") as f:
-            dev_data = yaml.safe_load(f)
+    dev_data = load_card_input(args.dev_card, args.dev_text, "DEV_HANDOFF")
+    if dev_data:
         dev_errors = validate_dev_handoff(dev_data, repo_path=repo_path)
         if dev_errors:
             print("[FAIL] DEV_HANDOFF Validation Failures:")
@@ -237,19 +332,14 @@ def main() -> int:
         else:
             print("[PASS] DEV_HANDOFF is cryptographically and structurally valid.")
 
-    if args.qa_card:
-        p = Path(args.qa_card)
-        if not p.is_file():
-            print(f"[FAIL] QA card file not found: {args.qa_card}")
-            return 1
-        with open(p, "r", encoding="utf-8") as f:
-            qa_data = yaml.safe_load(f)
-        manifest_p = Path(args.manifest) if args.manifest else None
+    qa_data = load_card_input(args.qa_card, args.qa_text, "QA_RESULT")
+    if qa_data:
+        evidence_dir_p = Path(args.evidence_dir) if args.evidence_dir else None
         qa_errors = validate_qa_result(
             qa_data,
             dev_data=dev_data,
             repo_path=repo_path,
-            evidence_manifest_path=manifest_p,
+            evidence_dir=evidence_dir_p,
         )
         if qa_errors:
             print("[FAIL] QA_RESULT Verification Failures:")
@@ -258,7 +348,7 @@ def main() -> int:
         else:
             print("[PASS] QA_RESULT is cryptographically and structurally valid.")
 
-    state, reason = compute_lifecycle_state(dev_data, qa_data, dev_errors, qa_errors)
+    state, reason = compute_lifecycle_state(dev_data, qa_data, dev_errors, qa_errors, pr_merged=args.pr_merged)
     print(f"\n[Computed Lifecycle State] => {state}")
     print(f"[Reason]                   => {reason}\n")
 

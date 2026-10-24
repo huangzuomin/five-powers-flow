@@ -1,0 +1,65 @@
+name: Validate PR Handoff Cards & Anti-Tamper Fence
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  validate-card:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Issue #8: 必须全量克隆以支持 git cat-file 和 merge-base
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install jsonschema pyyaml
+
+      - name: Verify Anti-Tamper Fence (Reject PR if modifying PROJECT-MAP.md)
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          echo "Comparing diff between $base_sha and $head_sha"
+          touched=$(git diff --name-only "$base_sha...$head_sha" | grep -Ei "(^|/)(PROJECT[-_]MAP|LESSONS)\.md$" || true)
+          if [ -n "$touched" ]; then
+            echo "::error::[FPF CRITICAL GATE BLOCK] DEV Pull Request touched protected governance file: $touched"
+            echo "Under Five-Powers-Flow RFC-001, PROJECT-MAP.md can only be updated by the Scribe via QA PASS."
+            exit 1
+          fi
+
+      - name: Extract and Validate DEV_HANDOFF Card
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python - <<'PY'
+          import os, re, sys, pathlib, yaml, json, jsonschema
+
+          body = os.environ.get("PR_BODY") or ""
+          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*DEV_HANDOFF[\s\S]*?)```", body, re.IGNORECASE)
+          if not m:
+              print("::warning::PR body does not contain a DEV_HANDOFF code block. Skipping handoff validation.")
+              sys.exit(0)
+
+          card_yaml = m.group(1).strip()
+          pathlib.Path("dev-card.yml").write_text(card_yaml, encoding="utf-8")
+
+          # 1. Validate Schema
+          schema = json.loads(pathlib.Path("schemas/dev-handoff.schema.json").read_text(encoding="utf-8"))
+          card_data = yaml.safe_load(card_yaml)
+          jsonschema.Draft7Validator(schema).validate(card_data)
+          print("✅ DEV_HANDOFF satisfies JSON Schema draft-07 contract.")
+          PY
+
+      - name: Run Cryptographic SHA & Scope Verification
+        if: hashFiles('dev-card.yml') != ''
+        run: |
+          export PYTHONPATH=.
+          python packages/fpf-coordinator/coordinator.py --dev-card dev-card.yml --check-git

@@ -2,21 +2,31 @@
 # -*- coding: utf-8 -*-
 """Five-Powers-Flow (FPF) Pre-Handoff Quality Gate.
 
-RFC-001 v1.1 Reference Implementation of the 4 mechanical pre-handoff gates:
+RFC-001 v1.2 Reference Implementation of the 4 mechanical pre-handoff gates:
 1. Clean Working Tree (No uncommitted or untracked dirty files)
 2. Valid Cryptographic HEAD Commit Object (Must be type 'commit')
-3. Fail-Closed Anti-Tamper Fence (Mechanical block if DEV branch touched PROJECT-MAP.md)
+3. Fail-Closed Anti-Tamper Fence (Mechanical block if DEV branch touched protected governance files)
 4. Sensitive Credential & Dirty Artifact Audit
 """
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 
 HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+PROTECTED_EXACT_FILES = {
+    "project-map.md",
+    "docs/project-map.md",
+    "docs/coordination/project-map.md",
+    "lessons.md",
+    "docs/lessons.md",
+    "docs/coordination/lessons.md",
+}
 
 SENSITIVE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),               # AWS Access Key
@@ -49,7 +59,6 @@ def gate_2_valid_head_commit() -> bool:
     if code != 0 or not HEX_SHA_RE.match(out):
         print(f"[FAIL Gate 2] Cannot resolve valid 40-digit HEAD SHA (got: '{out}')")
         return False
-    # P0-04 Fix: Check object type strictly
     type_code, type_out, _ = run_cmd(["git", "cat-file", "-t", out])
     if type_code != 0 or type_out != "commit":
         print(f"[FAIL Gate 2] HEAD SHA '{out}' is of type '{type_out}', expected 'commit'!")
@@ -59,8 +68,7 @@ def gate_2_valid_head_commit() -> bool:
 
 
 def gate_3_project_map_anti_tamper(base_branch: str = "main") -> bool:
-    """Gate 3: Fail-Closed Anti-Tamper Fence for PROJECT-MAP.md."""
-    # P1-03 Fix: Verify base branch exists first; fail-closed on any git error
+    """Gate 3: Fail-Closed Anti-Tamper Fence for PROJECT-MAP.md and LESSONS.md."""
     check_code, _, check_err = run_cmd(["git", "rev-parse", "--verify", base_branch])
     if check_code != 0:
         print(f"[CRITICAL FAIL Gate 3] Fail-Closed: Cannot resolve base branch '{base_branch}': {check_err}")
@@ -72,23 +80,23 @@ def gate_3_project_map_anti_tamper(base_branch: str = "main") -> bool:
         return False
 
     if out:
-        changed_files = [f.strip() for f in out.splitlines()]
+        changed_files = [f.strip() for f in out.splitlines() if f.strip()]
         for f in changed_files:
-            if "PROJECT-MAP.md" in f or "project-map.md" in f.lower():
-                print(f"[CRITICAL FAIL Gate 3] Anti-Tamper Block: DEV branch modified '{f}'!")
-                print("  -> Under Five-Powers-Flow, PROJECT-MAP.md is strictly maintained by Truth Scribe via QA PASS.")
+            norm_path = os.path.normpath(f).replace("\\", "/").lower()
+            if norm_path in PROTECTED_EXACT_FILES:
+                print(f"[CRITICAL FAIL Gate 3] Anti-Tamper Block: DEV branch modified protected file '{f}'!")
+                print("  -> Under Five-Powers-Flow RFC-001, PROJECT-MAP.md and LESSONS.md are exclusively maintained by Scribe.")
                 print("  -> Self-marking results in DEV PR is strictly forbidden.")
                 return False
 
-    print("[PASS Gate 3] Anti-Tamper check passed (PROJECT-MAP.md was not touched).")
+    print("[PASS Gate 3] Anti-Tamper check passed (protected governance files were not touched).")
     return True
 
 
 def gate_4_sensitive_artifact_audit() -> bool:
     """Gate 4: Scan uncommitted or newly added files for obvious secret leaks."""
-    # Scan files tracked in this branch compared to base
     code, out, _ = run_cmd(["git", "diff", "--name-only", "HEAD~1...HEAD"])
-    files_to_scan = [f.strip() for f in out.splitlines()] if (code == 0 and out) else []
+    files_to_scan = [f.strip() for f in out.splitlines() if f.strip()] if (code == 0 and out) else []
 
     leaks_found = []
     for filepath in files_to_scan:
@@ -114,12 +122,12 @@ def gate_4_sensitive_artifact_audit() -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="FPF Pre-Handoff Quality Gate Runner v1.1")
+    parser = argparse.ArgumentParser(description="FPF Pre-Handoff Quality Gate Runner v1.2")
     parser.add_argument("--base", default="main", help="Base branch to compare diff against (default: main)")
     parser.add_argument("--skip-clean-check", action="store_true", help="Skip clean tree check (for testing only)")
     args = parser.parse_args()
 
-    print("=== [FPF Pre-Handoff Quality Gates v1.1] ===\n")
+    print("=== [FPF Pre-Handoff Quality Gates v1.2] ===\n")
     success = True
 
     if not args.skip_clean_check:

@@ -42,11 +42,14 @@
           "environment": { "type": "string" },
           "raw_log_anchor": { "type": "string" }
         }
-      }
+      },
+      "minItems": 1
     },
     "not_run": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Mandatory list of untested areas/boundaries. Empty list is strictly prohibited by anti-deception rules."
     },
     "known_risks": {
       "type": "array",

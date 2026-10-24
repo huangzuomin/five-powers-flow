@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Five-Powers-Flow (FPF) Pre-Push Hook Template
+# Five-Powers-Flow (FPF) Pre-Push Hook Template v1.2
 # Copy this file to .git/hooks/pre-push and make it executable (chmod +x .git/hooks/pre-push)
 #
-# Mechanically prevents DEV branches from pushing any commit that touches PROJECT-MAP.md.
+# Mechanically alerts DEV developers if the pushed commits touch PROJECT-MAP.md or LESSONS.md.
+# NOTE: Client-side hooks can be bypassed via git push --no-verify.
+# True unbypassable enforcement is guaranteed by GitHub Branch Protection & .github/CODEOWNERS.
 
 while read local_ref local_sha remote_ref remote_sha
 do
@@ -11,20 +13,27 @@ do
         continue
     fi
 
-    # Check against origin/main or baseline
     base_ref="origin/main"
     if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
         base_ref="main"
     fi
 
-    touched_map=$(git diff --name-only "$base_ref...$local_sha" 2>/dev/null | grep -i "PROJECT-MAP.md")
-    if [ -n "$touched_map" ]; then
+    # Issue #7 Fix: 显式取 merge-base 避免三点 diff 漂移
+    merge_base=$(git merge-base "$base_ref" "$local_sha" 2>/dev/null)
+    [ -z "$merge_base" ] && merge_base="$base_ref"
+
+    PROTECTED_RE='(^|/)(PROJECT[-_]MAP|LESSONS)\.md$'
+    touched_protected=$(git diff --name-only "$merge_base..$local_sha" 2>/dev/null | grep -Ei "$PROTECTED_RE")
+
+    if [ -n "$touched_protected" ]; then
         echo ""
         echo "======================================================================"
         echo "[FPF PRE-PUSH BLOCKED] Anti-Tamper Violation Detected!"
-        echo "The commit you are attempting to push modifies: $touched_map"
-        echo "Under Five-Powers-Flow protocol, PROJECT-MAP.md can ONLY be updated by"
-        echo "the Project Map Scribe via independent document PR backed by QA PASS."
+        echo "The commit you are attempting to push modifies protected governance file(s):"
+        echo "$touched_protected"
+        echo ""
+        echo "Under Five-Powers-Flow RFC-001, PROJECT-MAP.md and LESSONS.md are exclusively"
+        echo "maintained by the Scribe role through independent document PRs."
         echo "Self-marking by DEV branches is strictly prohibited by law."
         echo "======================================================================"
         echo ""
