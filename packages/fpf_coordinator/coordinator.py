@@ -57,6 +57,23 @@ def run_cmd(cmd: List[str], cwd: Optional[Path] = None, timeout: int = 15) -> Tu
         return -1, "", str(exc)
 
 
+def verify_github_pr_merge(pr_identifier: str, repo_path: Optional[Path] = None) -> Tuple[bool, str, str]:
+    """Query GitHub API/CLI to verify that PR was legitimately merged on server."""
+    code, stdout, stderr = run_cmd(["gh", "pr", "view", str(pr_identifier), "--json", "state,mergedAt,mergeCommit"], cwd=repo_path)
+    if code != 0:
+        return False, "", f"Failed to query GitHub CLI for PR '{pr_identifier}': {stderr}"
+    try:
+        data = json.loads(stdout)
+        state = str(data.get("state", "")).upper()
+        if state != "MERGED":
+            return False, "", f"GitHub reports PR '{pr_identifier}' state is '{state}', expected 'MERGED'."
+        merge_commit = data.get("mergeCommit", {})
+        merge_sha = merge_commit.get("oid") if isinstance(merge_commit, dict) else ""
+        return True, str(merge_sha or ""), f"Confirmed merged at {data.get('mergedAt')}"
+    except Exception as exc:
+        return False, "", f"Failed to parse GitHub CLI response: {exc}"
+
+
 def git_is_commit_object(sha: str, repo_path: Optional[Path] = None) -> bool:
     """Verify that a 40-digit SHA physically exists AND is strictly a 'commit' object."""
     if not HEX_SHA_RE.match(sha):
@@ -258,6 +275,14 @@ def validate_qa_result(
         dev_tested_sha = str(dev_data.get("tested_code_sha", "")).strip()
         if tested_sha != dev_tested_sha:
             errors.append(f"CRITICAL DISCREPANCY: QA tested_sha ('{tested_sha}') != DEV tested_code_sha ('{dev_tested_sha}')!")
+
+        # Separation of Powers: DEV author cannot be QA author
+        dev_author = str(dev_data.get("author") or dev_data.get("signer") or dev_data.get("dev_author") or "").strip().lower()
+        qa_author = str(qa_data.get("author") or qa_data.get("signer") or qa_data.get("qa_author") or "").strip().lower()
+        if dev_author and qa_author and dev_author == qa_author:
+            errors.append(
+                f"CRITICAL SEPARATION OF POWERS VIOLATION: DEV author ('{dev_author}') cannot sign as QA auditor! Independent identity required."
+            )
     else:
         errors.append("CRITICAL: QA_RESULT cannot be validated in isolation without matching DEV_HANDOFF!")
 
@@ -373,6 +398,7 @@ def main() -> int:
     parser.add_argument("--qa-text", help="Raw text (Issue comment) containing a QA_RESULT code block")
     parser.add_argument("--evidence-dir", help="Path to evidence directory containing manifest.json")
     parser.add_argument("--check-git", action="store_true", help="Physically verify commit objects in local git tree")
+    parser.add_argument("--verify-pr-merge", help="PR number or URL to physically verify merge state via GitHub API/CLI")
     parser.add_argument("--pr-merged", action="store_true", help="Assert PR is merged into main branch (verified via git)")
     args = parser.parse_args()
 
@@ -381,6 +407,15 @@ def main() -> int:
     qa_errors = []
 
     print("=== [FPF Trusted Evaluator Engine v1.2.1] ===\n")
+
+    if args.verify_pr_merge:
+        is_merged, merge_sha, msg = verify_github_pr_merge(args.verify_pr_merge, repo_path=repo_path)
+        if not is_merged:
+            print(f"[FAIL] GitHub PR Merge Verification Failed: {msg}")
+            qa_errors.append(f"PR merge verification failed: {msg}")
+        else:
+            print(f"[PASS] GitHub PR Merge Verified: {msg} (Commit: {merge_sha})")
+            args.pr_merged = True
 
     dev_data = load_card_input(args.dev_card, args.dev_text, "DEV_HANDOFF")
     if dev_data:

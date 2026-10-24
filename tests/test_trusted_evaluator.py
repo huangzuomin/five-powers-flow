@@ -233,6 +233,27 @@ class TestTrustedEvaluator(unittest.TestCase):
         extracted = coordinator.extract_yaml_block(markdown_body, marker="DEV_HANDOFF")
         self.assertIn("task_id: T-999", extracted)
 
+    def test_p1_02_dev_author_equals_qa_author_rejected(self):
+        """P1-02: Separation of Powers: DEV author cannot sign as QA auditor."""
+        dev_with_author = {**self.dev_card, "author": "developer-alice"}
+        qa_same_author = {
+            "result_version": 1,
+            "kind": "QA_RESULT",
+            "task_id": "TEST-CI-001",
+            "tested_sha": self.head_sha,
+            "runner_sha": self.head_sha,
+            "qa_contract_sha": self.head_sha,
+            "author": "developer-alice", # Same person!
+            "environment": "Ubuntu 22.04",
+            "verdict": "FAIL",
+            "evidence_manifest_sha256": "a" * 64,
+            "checks": [{"name": "pytest", "exit_code": 1}],
+            "findings": {},
+            "next_action": "REWORK",
+        }
+        errors = coordinator.validate_qa_result(qa_same_author, dev_data=dev_with_author, repo_path=Path.cwd())
+        self.assertTrue(any("cannot sign as QA auditor" in e for e in errors))
+
     def test_p0_04_merged_fails_closed_when_errors_exist(self):
         """P0-04: PR merged assertion fails-closed if validation errors are present."""
         state, _ = coordinator.compute_lifecycle_state(
