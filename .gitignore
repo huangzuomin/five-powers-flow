@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node / JS
+node_modules/
+dist/
+build/
+.pnpm-debug.log*
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Worktree & Temporary execution directories
+_worktrees/
+.tmp/
+tmp/
+*.log
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local credentials & state
+.env
+.env.local
+*.local.json
+coordination-ledger.local.json

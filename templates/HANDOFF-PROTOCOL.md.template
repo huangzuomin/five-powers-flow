@@ -1,0 +1,14 @@
+# 项目交接协议 (HANDOFF-PROTOCOL.md Template)
+
+> **适用范围**：人类决策者、DEV/QA 总指挥、地图总控、DEV/QA 工位。
+
+## 1. 最小数据流与凭据
+- 切片任务以 GitHub Issue 为唯一生命周期容器。
+- 研发提交必须在 PR 描述中包含合规的 `DEV_HANDOFF` YAML 区块。
+- QA 验收必须在 Issue 评论中签署合规的 `QA_RESULT` YAML 区块。
+
+## 2. 状态机迁移规则
+1. `AUTHORIZED` $\rightarrow$ 派发 DEV 工位 Worktree。
+2. `DEV_READY` $\rightarrow$ QA 总指挥入场审查通过后，派发 QA 隔离工位。
+3. `QA_RESULT: PASS` $\rightarrow$ 地图总控提出文档 PR $\rightarrow$ 呈送人类终审简报。
+4. `QA_RESULT: FAIL` $\rightarrow$ 携带错误日志退回 DEV 工位重新修复。

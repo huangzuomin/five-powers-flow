@@ -1,0 +1,19 @@
+# 项目唯一事实地图 (PROJECT-MAP.md Template)
+
+> **权威性声明**：本文件是本工程唯一权威项目进展地图。  
+> 仅允许由项目地图总控角色在核验独立 QA 的 `PASS` 裁决及真实测试证据后，通过独立纯文档 PR 提议更新。
+
+## 一、当前里程碑总览
+
+| 切片编号 | 模块 / 目标 | 负责人 | DEV 状态 | 独立 QA 裁决 | 主干合并状态 | 部署状态 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| SLICE-001 | 基础设施初始化 | DEV-Team | DONE (sha: `xxxx`) | PASS (sha: `xxxx`) | MERGED (PR #1) | DEPLOYED |
+| SLICE-002 | 核心业务模型与迁移 | DEV-Team | PENDING | NOT_RUN | OPEN (PR #2) | PENDING |
+
+## 二、切片详细进度记录
+
+### [SLICE-001] 基础设施初始化
+- **目标**：搭建工程基座与环境门禁
+- **代码提交**：`abcdef1234567890abcdef1234567890abcdef12`
+- **QA 验收报告**：`docs/evidence/qa/SLICE-001.md` (主哈希: `sha256:...`)
+- **归档时间**：YYYY-MM-DD

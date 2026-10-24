@@ -1,0 +1,13 @@
+# AGENTS.md · 仓库级智能体行为红线守则 (Template)
+
+本文件是本仓库面向所有 AI 智能体（DEV/QA/地图/协调器）的唯一行为宪章与不可逾越红线。
+
+## 核心红线 (The Cardinal Rule)
+
+$$\text{DEV 交付} \neq \text{QA 通过} \neq \text{批准合并} \neq \text{批准部署}$$
+
+1. **禁止假阳性自欺**：本地未真实运行的测试严禁标为 `passed`；未覆盖项必须在 `not_run` 中明确列出。
+2. **禁止自改试卷**：DEV 智能体严禁修改 `docs/coordination/PROJECT-MAP.md`；项目地图只能由项目地图总控依据独立 QA 报告提出纯文档 PR。
+3. **禁止越权合并与部署**：代码合并（Merge）和生产环境部署（Deploy）的最终决断权永远属于人类最高决策者。任何智能体或自动化脚本均不得代签。
+4. **代码只读原则 (QA 角色)**：QA 工位发现代码缺陷，必须通过 `QA_RESULT: FAIL` 裁决与复现日志打回，严禁直接修改研发业务代码。
+5. **开工必查错题本**：任何角色开始编写代码或测试前，必须查阅 `docs/coordination/LESSONS.md`。复犯已知错题直接判定为 `DEV FAIL`。
