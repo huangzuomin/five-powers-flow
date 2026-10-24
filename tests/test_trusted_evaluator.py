@@ -53,10 +53,34 @@ class TestTrustedEvaluator(unittest.TestCase):
 
     def test_issue_3_baseline_non_ancestor_is_rejected(self):
         """Issue #3: If baseline is not an ancestor of tested, it must be rejected."""
-        # Using HEAD as baseline and HEAD~1 as tested inverts history
-        inverted_dev = {**self.dev_card, "baseline_sha": self.head_sha, "tested_code_sha": self.parent_sha}
-        errors = coordinator.validate_dev_handoff(inverted_dev, repo_path=Path.cwd())
-        self.assertTrue(any("is NOT an ancestor of tested_code_sha" in e for e in errors))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            coordinator.run_cmd(["git", "init"], cwd=tmppath)
+            coordinator.run_cmd(["git", "config", "user.name", "CI Tester"], cwd=tmppath)
+            coordinator.run_cmd(["git", "config", "user.email", "ci@example.com"], cwd=tmppath)
+            coordinator.run_cmd(["git", "config", "commit.gpgsign", "false"], cwd=tmppath)
+
+            # Commit 1 (A)
+            (tmppath / "file.txt").write_text("commit A", encoding="utf-8")
+            coordinator.run_cmd(["git", "add", "."], cwd=tmppath)
+            coordinator.run_cmd(["git", "commit", "-m", "commit A"], cwd=tmppath)
+            _, sha_a, _ = coordinator.run_cmd(["git", "rev-parse", "HEAD"], cwd=tmppath)
+
+            # Commit 2 (B)
+            (tmppath / "file.txt").write_text("commit B", encoding="utf-8")
+            coordinator.run_cmd(["git", "add", "."], cwd=tmppath)
+            coordinator.run_cmd(["git", "commit", "-m", "commit B"], cwd=tmppath)
+            _, sha_b, _ = coordinator.run_cmd(["git", "rev-parse", "HEAD"], cwd=tmppath)
+
+            # Invert: claim sha_b (descendant) is baseline and sha_a (parent) is tested_code_sha
+            inverted_dev = {
+                **self.dev_card,
+                "baseline_sha": sha_b,
+                "tested_code_sha": sha_a,
+                "changed_files": ["file.txt"],
+            }
+            errors = coordinator.validate_dev_handoff(inverted_dev, repo_path=tmppath)
+            self.assertTrue(any("is NOT an ancestor of tested_code_sha" in e for e in errors))
 
     def test_issue_4_runner_and_contract_sha_must_be_commits(self):
         """Issue #4: runner_sha and qa_contract_sha must be valid 40-digit commit SHAs."""
