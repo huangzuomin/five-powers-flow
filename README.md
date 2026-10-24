@@ -1,12 +1,13 @@
 # Five-Powers-Flow (FPF) ｜ 五权分立人机协同自治软件工程框架
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Specification](https://img.shields.io/badge/Spec-RFC--001%20v1.0-green.svg)](docs/SPECIFICATION.md)
+[![Specification](https://img.shields.io/badge/Spec-RFC--001%20v1.1-green.svg)](docs/SPECIFICATION.md)
 [![Status](https://img.shields.io/badge/Status-Production%20Proven-brightgreen.svg)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 > **"DEV 交付 ≠ QA 通过 ≠ 批准合并 ≠ 批准部署"**  
-> 一套基于分权制衡思想、面向多智能体（Multi-Agent）与人类深度协同的高可信、防幻觉、自驱动软件交付框架。
+> 一套基于分权制衡思想、面向多智能体（Multi-Agent）与人类深度协同的高可信、防幻觉、自驱动软件交付框架。  
+> **以 GitHub 为唯一法定事实源与跨 Agent 异步通信总线。**
 
 ---
 
@@ -21,6 +22,38 @@
 
 **Five-Powers-Flow (FPF)** 的核心哲学：**将政治学中的权力分立制衡机制与现代严肃软件工程纪律代码化**。  
 通过将人类意图、架构设计、独立质检、事实记账与中立调度彻底解耦，在保证**物理环境隔离**与**端到端硬核证据链闭环**的前提下，让异构智能体群实现**无人值守连续交付**，同时确保人类保留最终主权。
+
+---
+
+## 🌐 GitHub 在体系中的战略定位：宪政级基础设施
+
+在 Five-Powers-Flow 中，GitHub **绝不仅是一个代码仓库**，而是整套框架运转的**单一事实源（SSOT）与公共总线**：
+
+```
+                ┌────────────────────────────────────────────────────────┐
+                │             GitHub (唯一法定事实源与总线)              │
+                ├────────────────────────────────────────────────────────┤
+                │  1. 跨异构 Agent 异步通信总线 (Issue/PR/Structured YAML)│
+                │  2. 不可篡改的证据链与 Git Commit 锚点 (40-digit SHA)  │
+                │  3. 无数据库的公开状态机 (Labels & Lifecycle Tracking) │
+                │  4. 主权隔离与权限物理防火墙 (Branch Protection & Merge)│
+                │  5. 物理工位纯净克隆锚点 (Git Worktree Base)           │
+                │  6. 双 PR 制衡法定执行场 (Code PR vs Map PR)           │
+                └───────────────────────────▲────────────────────────────┘
+                                            │ 读写数据与事件触发
+    ┌──────────────────────┬────────────────┼──────────────────────┬──────────────────────┐
+    │                      │                │                      │                      │
+┌───┴──────────┐   ┌───────┴──────┐   ┌─────┴────────┐   ┌─────────┴────┐   ┌──────────────┴───────┐
+│ ① 人类决策者 │   │ ② 代理 Agent │   │ ③ DEV 总指挥 │   │ ④ QA 总指挥  │   │ ⑤ 项目地图总控       │
+└──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘   └──────────────────────┘
+```
+
+1. **跨异构 Agent 通信总线**：彻底解决 ChatGPT、Claude、Codex、DeepSeek 等不同厂商、无局域网互通模型之间的异步数据交换难题。所有任务令与报告均通过 GitHub Issue / PR 的标准化 YAML 卡片传递。
+2. **不可篡改的法定证据链**：AI 聊天记录随时会被压缩或遗忘，但 GitHub 上的 40 位 Commit SHA、Diff 记录具备密码学不可篡改性。“聊天仅供通知，GitHub 才是法定裁判依据”。
+3. **无中心数据库的状态机表面**：切片生命周期（待开发、提测中、QA审查中、待合并）直接投射为 GitHub Labels 与状态流，无需外部专用数据库。
+4. **主权隔离与权限防火墙**：GitHub 分支保护规则（Branch Protection）与合并锁，从物理底层保障了“人类最高决策权不可被 Agent 篡夺”。未经人类点击 Merge，主干代码纹丝不动。
+5. **物理工位的纯净克隆锚点**：DEV 与 QA 两个独立 Worktree 均以 GitHub 远端锁定的确切 Commit SHA 为基准，绝不把本地脏文件带入测试。
+6. **双 PR 制衡法定执行场**：代码 PR（DEV 提）与地图 PR（地图总控提）在 GitHub 上物理分离，使“写代码者严禁自改试卷”在平台机制层面得到铁腕落实。
 
 ---
 
