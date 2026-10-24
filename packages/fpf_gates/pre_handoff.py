@@ -74,7 +74,9 @@ def gate_3_project_map_anti_tamper(base_branch: str = "main") -> bool:
         print(f"[CRITICAL FAIL Gate 3] Fail-Closed: Cannot resolve base branch '{base_branch}': {check_err}")
         return False
 
-    code, out, err = run_cmd(["git", "diff", "--name-only", f"{base_branch}...HEAD"])
+    mb_code, mb_out, _ = run_cmd(["git", "merge-base", base_branch, "HEAD"])
+    merge_base = mb_out.strip() if (mb_code == 0 and mb_out.strip()) else base_branch
+    code, out, err = run_cmd(["git", "diff", "--name-only", f"{merge_base}..HEAD"])
     if code != 0:
         print(f"[CRITICAL FAIL Gate 3] Fail-Closed: 'git diff {base_branch}...HEAD' returned non-zero exit code: {err}")
         return False
@@ -121,16 +123,22 @@ def gate_4_sensitive_artifact_audit(base_branch: str = "main") -> bool:
 
     leaks_found = []
     for filepath in sorted(files_to_scan):
-        p = Path(filepath)
-        if not p.is_file():
+        file_text = ""
+        c_code, c_out, _ = run_cmd(["git", "show", f"HEAD:{filepath}"])
+        if c_code == 0:
+            file_text = c_out
+        else:
+            p = Path(filepath)
+            if p.is_file():
+                try:
+                    file_text = p.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+        if not file_text:
             continue
-        try:
-            content = p.read_text(encoding="utf-8", errors="ignore")
-            for pattern in SENSITIVE_PATTERNS:
-                if pattern.search(content):
-                    leaks_found.append((filepath, pattern.pattern))
-        except Exception:
-            pass
+        for pattern in SENSITIVE_PATTERNS:
+            if pattern.search(file_text):
+                leaks_found.append((filepath, pattern.pattern))
 
     if leaks_found:
         print("[FAIL Gate 4] Sensitive credential patterns detected in branch files:")

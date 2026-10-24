@@ -179,7 +179,7 @@ scribe: "project-map-scribe"
 ## 6. 核心质量门禁与反证机制 (Quality Gates & Evidence Discipline)
 
 ### 6.1 门禁左移与预检 (`pre-handoff`)
-DEV 提测前必须在本地通过四道物理门禁（`packages/fpf-gates/pre_handoff.py`）：
+DEV 提测前必须在本地通过四道物理门禁（`packages/fpf_gates/pre_handoff.py`）：
 1. **工作树纯净性**：工作树无 untracked 或未暂存脏文件；
 2. **治理防线无窜写**：严禁修改 `PROJECT-MAP.md` 与 `LESSONS.md`；
 3. **元数据 SHA 祖先有效性**：验证 baseline 是 tested 的真实祖先，且变更文件匹配；

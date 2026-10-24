@@ -31,7 +31,7 @@
 
 1. **工具集硬剔除**：在支持的平台（如 Claude Code `Explore`/`Plan` 子代理）中，直接剔除写操作工具（`Edit`/`Write`），使规划与监察角色在物理层面无法修改代码；
 2. **Pre-Push / Pre-Tool-Use 钩子拦截**：在本地 Git Hook 与工具调用层部署哨兵，**通过客户端钩子与服务端 CODEOWNERS + CI 双层阻断研发工位（DEV）向 `PROJECT-MAP.md` 窜写**（详见 [templates/git-hooks/pre-push.template](templates/git-hooks/pre-push.template)）；
-3. **密码学 SHA 强一致性校验**：由中立校验脚本强制核对 `qa_card.tested_sha == dev_card.tested_code_sha`，且必须在 Git 对象库中物理存在（`git cat-file -e`），从代码层杜绝伪造验收。
+3. **密码学 SHA 强一致性校验**：由中立校验脚本强制核对 `qa_card.tested_sha == dev_card.tested_code_sha`，且必须在 Git 对象库中物理存在（`git cat-file -t` == commit），从代码层杜绝伪造验收。
 
 ---
 
@@ -105,7 +105,7 @@
 ### 1. 运行本地提测前门禁 (Pre-Handoff Quality Gate)
 DEV 工位在提测前，必须在本地运行门禁脚本：
 ```bash
-python packages/fpf-gates/pre_handoff.py --base main
+python packages/fpf_gates/pre_handoff.py --base main
 ```
 脚本将机械强制检查：
 - 工作树是否完全干净（无未提交、无未受控文件）；
@@ -124,7 +124,7 @@ python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-
 - 两个 SHA 是否在本地 Git 对象库中真实存在。
 
 ### 3. 第一个 PR 走通标准闭环 (First Walkthrough via Protocol)
-1. **DEV 发起分支与开发**：在独立 worktree 或特性分支开发，本地运行 `python packages/fpf-gates/pre_handoff.py --base main`；
+1. **DEV 发起分支与开发**：在独立 worktree 或特性分支开发，本地运行 `python packages/fpf_gates/pre_handoff.py --base main`；
 2. **提交代码 PR**：在 PR 描述中填入合规 `DEV_HANDOFF` 卡片；CI 自动触发并验证卡片与 SHA 绑定；
 3. **QA 独立工位验收**：检出 PR 分支，执行对抗验证，输出 `docs/evidence/` 与 `manifest.json`，在评论中签署 `QA_RESULT`；
 4. **人类终审与 Squash Merge**：人类负责人核查红绿简报并在 GitHub 点击 Merge，主干生成正式提交 SHA；
@@ -177,7 +177,7 @@ five-powers-flow/
 │   └── test_trusted_evaluator.py       # 密码学断言与安全边界单元测试套件
 └── packages/                           # 核心门禁与验证器实现
     ├── fpf_coordinator/coordinator.py  # 协调器与密码学 SHA/作用域/证据包强校验器
-    └── fpf-gates/pre_handoff.py        # 交付前四道机械门禁检查器 (含敏感产物审计)
+    └── fpf_gates/pre_handoff.py        # 交付前四道机械门禁检查器 (含敏感产物审计)
 ```
 
 ---
