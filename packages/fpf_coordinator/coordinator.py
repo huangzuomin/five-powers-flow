@@ -180,7 +180,7 @@ def extract_yaml_block(text: str, marker: str = "DEV_HANDOFF") -> str:
     """Extract standard YAML blocks enclosed in ```yaml ... ``` from text."""
     if not text:
         return ""
-    pattern = re.compile(rf"```ya?ml\s*([\s\S]*?kind:\s*{marker}[\s\S]*?)```", re.IGNORECASE)
+    pattern = re.compile(rf"```ya?ml\s*([\s\S]*?kind:\s*['\"]?{marker}['\"]?[\s\S]*?)```", re.IGNORECASE)
     match = pattern.search(text)
     if match:
         return match.group(1).strip()
