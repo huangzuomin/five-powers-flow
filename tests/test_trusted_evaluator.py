@@ -8,6 +8,9 @@ Comprehensive test coverage across FPF RFC-001 audit boundaries:
 - Issue #4: runner_sha & qa_contract_sha mandatory cryptographic commit check
 - Issue #5 / P1-3: Evidence directory profile coverage, empty manifest rejection, item sha256 recalculation
 - Issue #9: extract_yaml_block active markdown parser
+- Issue #17: hook_guard_dev blocking project-map & lessons mutations in Edit/Write/Bash
+- Issue #19: --manifest parameter resolves containing evidence directory
+- Issue #21: manifest.schema.json validation and NOT_APPLICABLE justification enforcement
 - P0-03: checks exit code enforcement for PASS verdict & mandatory evidence-dir
 - P0-04: compute_lifecycle_state fail-closed precedence and cryptographic merge reachability
 """
@@ -25,10 +28,27 @@ from packages.fpf_coordinator import coordinator
 class TestTrustedEvaluator(unittest.TestCase):
 
     def setUp(self):
-        code, out, _ = coordinator.run_cmd(["git", "rev-parse", "HEAD"])
-        self.head_sha = out if code == 0 else "0000000000000000000000000000000000000000"
-        code_p, out_p, _ = coordinator.run_cmd(["git", "rev-parse", "HEAD~1"])
-        self.parent_sha = out_p if code_p == 0 else self.head_sha
+        # Create a hermetic git repository for the test suite
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.repo_path = Path(self.tmpdir.name)
+
+        coordinator.run_cmd(["git", "init", "-b", "main"], cwd=self.repo_path)
+        coordinator.run_cmd(["git", "config", "user.name", "FPF Test Agent"], cwd=self.repo_path)
+        coordinator.run_cmd(["git", "config", "user.email", "agent@fpf.org"], cwd=self.repo_path)
+        coordinator.run_cmd(["git", "config", "commit.gpgsign", "false"], cwd=self.repo_path)
+
+        # Baseline commit (Commit A)
+        p1 = self.repo_path / "coordinator.py"
+        p1.write_text("# Initial baseline code\n", encoding="utf-8")
+        coordinator.run_cmd(["git", "add", "."], cwd=self.repo_path)
+        coordinator.run_cmd(["git", "commit", "-m", "chore: baseline initial commit"], cwd=self.repo_path)
+        _, self.parent_sha, _ = coordinator.run_cmd(["git", "rev-parse", "HEAD"], cwd=self.repo_path)
+
+        # Tested commit (Commit B) on main
+        p1.write_text("# Initial baseline code\n# Feature addition\n", encoding="utf-8")
+        coordinator.run_cmd(["git", "add", "."], cwd=self.repo_path)
+        coordinator.run_cmd(["git", "commit", "-m", "feat: tested feature commit"], cwd=self.repo_path)
+        _, self.head_sha, _ = coordinator.run_cmd(["git", "rev-parse", "HEAD"], cwd=self.repo_path)
 
         self.dev_card = {
             "handoff_version": 1,
@@ -38,17 +58,20 @@ class TestTrustedEvaluator(unittest.TestCase):
             "tested_code_sha": self.head_sha,
             "pr_url": "https://github.com/huangzuomin/five-powers-flow/pull/1",
             "scope": "Test CI Scope",
-            "changed_files": ["packages/fpf_coordinator/coordinator.py"],
+            "changed_files": ["coordinator.py"],
             "dev_checks": [{"command": "pytest", "exit_code": 0}],
             "not_run": ["e2e full regression"],
             "known_risks": [],
             "state": "DEV_READY_FOR_QA",
         }
 
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
     def test_issue_2_not_run_empty_without_justification_is_rejected(self):
         """Issue #2: not_run cannot be empty without an explicit justification."""
         bad_dev = {**self.dev_card, "not_run": []}
-        errors = coordinator.validate_dev_handoff(bad_dev)
+        errors = coordinator.validate_dev_handoff(bad_dev, repo_path=self.repo_path)
         self.assertTrue(any("not_run is empty" in e for e in errors))
 
     def test_p2_1_not_run_with_exemption_justification_accepted(self):
@@ -58,8 +81,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             "not_run": [],
             "not_run_exemption_justification": "Verified 100% boundary testing across unit and integration matrix in CI.",
         }
-        errors = coordinator.validate_dev_handoff(valid_exempt_dev, repo_path=Path.cwd())
-        # Should not have not_run errors
+        errors = coordinator.validate_dev_handoff(valid_exempt_dev, repo_path=self.repo_path)
         self.assertFalse(any("not_run is empty" in e for e in errors))
 
     def test_issue_3_baseline_non_ancestor_is_rejected(self):
@@ -106,7 +128,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             "findings": {},
             "next_action": "REWORK",
         }
-        errors = coordinator.validate_qa_result(bad_qa, dev_data=self.dev_card, repo_path=Path.cwd())
+        errors = coordinator.validate_qa_result(bad_qa, dev_data=self.dev_card, repo_path=self.repo_path)
         self.assertTrue(any("runner_sha must be a 40-digit hex SHA" in e for e in errors))
         self.assertTrue(any("qa_contract_sha '0000000000000000000000000000000000000000' does not exist" in e for e in errors))
 
@@ -126,7 +148,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             "findings": {},
             "next_action": "MERGE",
         }
-        errors = coordinator.validate_qa_result(qa_pass_no_dir, dev_data=self.dev_card, repo_path=Path.cwd(), evidence_dir=None)
+        errors = coordinator.validate_qa_result(qa_pass_no_dir, dev_data=self.dev_card, repo_path=self.repo_path, evidence_dir=None)
         self.assertTrue(any("strictly requires physical evidence directory" in e for e in errors))
 
     def test_p0_03_nonzero_exit_code_rejects_pass(self):
@@ -141,13 +163,13 @@ class TestTrustedEvaluator(unittest.TestCase):
                 "runner_sha": self.head_sha,
                 "qa_contract_sha": self.head_sha,
                 "environment": "Ubuntu 22.04",
-                "verdict": "PASS", # Claiming PASS fraudulently
+                "verdict": "PASS",
                 "evidence_manifest_sha256": "a" * 64,
-                "checks": [{"name": "pytest", "exit_code": 1}], # But exit code was 1!
+                "checks": [{"name": "pytest", "exit_code": 1}],
                 "findings": {},
                 "next_action": "MERGE",
             }
-            errors = coordinator.validate_qa_result(qa_fail_check, dev_data=self.dev_card, repo_path=Path.cwd(), evidence_dir=tmppath)
+            errors = coordinator.validate_qa_result(qa_fail_check, dev_data=self.dev_card, repo_path=self.repo_path, evidence_dir=tmppath)
             self.assertTrue(any("failed with exit_code 1. Verdict cannot be PASS" in e for e in errors))
 
     def test_p0_03_empty_manifest_items_rejected(self):
@@ -155,7 +177,7 @@ class TestTrustedEvaluator(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             manifest_file = tmppath / "manifest.json"
-            manifest_file.write_text(json.dumps({"items": []}), encoding="utf-8")
+            manifest_file.write_text(json.dumps({"manifest_version": 1, "task_id": "T1", "profile": "Library", "items": []}), encoding="utf-8")
             manifest_sha = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
 
             errors = coordinator.verify_evidence_directory(tmppath, manifest_sha, profile="Library")
@@ -169,8 +191,10 @@ class TestTrustedEvaluator(unittest.TestCase):
             f1.write_text("test logs", encoding="utf-8")
             h1 = hashlib.sha256(b"test logs").hexdigest()
 
-            # Library profile requires EVID-01, EVID-04, EVID-09; here we omit EVID-04 and EVID-09
             manifest_dict = {
+                "manifest_version": 1,
+                "task_id": "T-EVID",
+                "profile": "Library",
                 "items": [{"id": "EVID-01", "path": "evid01.log", "sha256": h1}]
             }
             manifest_file = tmppath / "manifest.json"
@@ -191,8 +215,14 @@ class TestTrustedEvaluator(unittest.TestCase):
                 h = hashlib.sha256(f.read_bytes()).hexdigest()
                 items_decl.append({"id": evid_id, "path": fname, "sha256": h})
 
+            manifest_dict = {
+                "manifest_version": 1,
+                "task_id": "TEST-CI-001",
+                "profile": "Library",
+                "items": items_decl,
+            }
             manifest_file = tmppath / "manifest.json"
-            manifest_file.write_text(json.dumps({"items": items_decl}), encoding="utf-8")
+            manifest_file.write_text(json.dumps(manifest_dict), encoding="utf-8")
             manifest_sha = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
 
             qa_card = {
@@ -211,12 +241,12 @@ class TestTrustedEvaluator(unittest.TestCase):
                 "next_action": "MERGE",
             }
 
-            errs = coordinator.validate_qa_result(qa_card, dev_data=self.dev_card, repo_path=Path.cwd(), evidence_dir=tmppath)
+            errs = coordinator.validate_qa_result(qa_card, dev_data=self.dev_card, repo_path=self.repo_path, evidence_dir=tmppath)
             self.assertEqual(len(errs), 0)
 
             # Corrupting unit.log triggers item hash mismatch
             (tmppath / "unit.log").write_text("tampered log", encoding="utf-8")
-            errs_corrupt = coordinator.validate_qa_result(qa_card, dev_data=self.dev_card, repo_path=Path.cwd(), evidence_dir=tmppath)
+            errs_corrupt = coordinator.validate_qa_result(qa_card, dev_data=self.dev_card, repo_path=self.repo_path, evidence_dir=tmppath)
             self.assertTrue(any("Evidence SHA-256 mismatch" in e for e in errs_corrupt))
 
     def test_issue_9_extract_yaml_block_from_markdown(self):
@@ -243,7 +273,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             "tested_sha": self.head_sha,
             "runner_sha": self.head_sha,
             "qa_contract_sha": self.head_sha,
-            "author": "developer-alice", # Same person!
+            "author": "developer-alice",
             "environment": "Ubuntu 22.04",
             "verdict": "FAIL",
             "evidence_manifest_sha256": "a" * 64,
@@ -251,7 +281,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             "findings": {},
             "next_action": "REWORK",
         }
-        errors = coordinator.validate_qa_result(qa_same_author, dev_data=dev_with_author, repo_path=Path.cwd())
+        errors = coordinator.validate_qa_result(qa_same_author, dev_data=dev_with_author, repo_path=self.repo_path)
         self.assertTrue(any("cannot sign as QA auditor" in e for e in errors))
 
     def test_p0_04_merged_fails_closed_when_errors_exist(self):
@@ -280,9 +310,57 @@ class TestTrustedEvaluator(unittest.TestCase):
             [],
             [],
             pr_merged=True,
-            repo_path=Path.cwd(),
+            repo_path=self.repo_path,
         )
         self.assertEqual(state, "MERGED_AND_CLOSED")
+
+    def test_p0_04_merged_rejected_when_commit_not_ancestor_of_main(self):
+        """P0-04: PR merged asserted but commit is not merged into main branch."""
+        # Create a detached branch with unmerged commit
+        coordinator.run_cmd(["git", "checkout", "-b", "unmerged-feat"], cwd=self.repo_path)
+        (self.repo_path / "feat.txt").write_text("unmerged work", encoding="utf-8")
+        coordinator.run_cmd(["git", "add", "."], cwd=self.repo_path)
+        coordinator.run_cmd(["git", "commit", "-m", "unmerged commit"], cwd=self.repo_path)
+        _, unmerged_sha, _ = coordinator.run_cmd(["git", "rev-parse", "HEAD"], cwd=self.repo_path)
+        # Switch back to main
+        coordinator.run_cmd(["git", "checkout", "main"], cwd=self.repo_path)
+
+        qa_pass = {
+            "result_version": 1,
+            "kind": "QA_RESULT",
+            "task_id": "TEST-CI-001",
+            "tested_sha": unmerged_sha,
+            "verdict": "PASS",
+        }
+        state, reason = coordinator.compute_lifecycle_state(
+            self.dev_card,
+            qa_pass,
+            [],
+            [],
+            pr_merged=True,
+            repo_path=self.repo_path,
+        )
+        self.assertEqual(state, "MERGE_UNVERIFIED")
+        self.assertIn("is NOT an ancestor", reason)
+
+    def test_issue_21_not_applicable_item_requires_reason(self):
+        """Issue #21: NOT_APPLICABLE status requires architectural justification in 'reason'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            manifest_dict = {
+                "manifest_version": 1,
+                "task_id": "T-NA",
+                "profile": "Library",
+                "items": [
+                    {"id": "EVID-01", "path": "evid01.log", "sha256": "a"*64, "status": "NOT_APPLICABLE", "reason": "short"}
+                ]
+            }
+            manifest_file = tmppath / "manifest.json"
+            manifest_file.write_text(json.dumps(manifest_dict), encoding="utf-8")
+            manifest_sha = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
+
+            errors = coordinator.verify_evidence_directory(tmppath, manifest_sha, profile="Library")
+            self.assertTrue(any("requires architectural justification in 'reason'" in e for e in errors))
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ _worktrees/
 .tmp/
 tmp/
 *.log
+!docs/evidence/**
 
 # OS & IDE
 .DS_Store

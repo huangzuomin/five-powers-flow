@@ -65,10 +65,10 @@
 
 在 FPF 验证器中，主锚点不再是纸面文本，而是必须能被物理重算：
 ```bash
-python packages/fpf-coordinator/coordinator.py \
+python -m packages.fpf_coordinator.coordinator \
   --dev-card docs/evidence/dev_handoff.yaml \
   --qa-card docs/evidence/qa_result.yaml \
-  --manifest docs/evidence/manifest.json \
+  --evidence-dir docs/evidence \
   --check-git
 ```
 若哈希不匹配或文件缺失，验证器将以退出码 1 阻断流程。

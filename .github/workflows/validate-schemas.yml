@@ -40,3 +40,12 @@ jobs:
         run: |
           export PYTHONPATH=.
           python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Assert No Duplicate Module Trees
+        run: |
+          dup=$(find packages -maxdepth 1 -type d | sed 's|packages/||; s|-|_|g' | sort | uniq -d)
+          if [ -n "$dup" ]; then
+            echo "::error::Duplicate module directories (dash/underscore variants): $dup"
+            exit 1
+          fi
+          echo "Package structure verified clean: single canonical packages.fpf_coordinator"

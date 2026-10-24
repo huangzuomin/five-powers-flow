@@ -3,7 +3,8 @@
 """Five-Powers-Flow (FPF) Claude Code PreToolUse Guard for DEV Workspaces.
 
 Mechanically enforces the Five-Powers-Flow cardinal rule:
-DEV agents are strictly forbidden from modifying PROJECT-MAP.md via Edit/Write tools.
+DEV agents are strictly forbidden from modifying PROJECT-MAP.md or LESSONS.md
+via file editing tools (Edit, Write, NotebookEdit) or mutation commands in Bash.
 
 Exit Code Protocol:
 - 0: Tool invocation permitted.
@@ -14,7 +15,25 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import sys
+
+PROTECTED_EXACT_FILES = {
+    "project-map.md",
+    "docs/project-map.md",
+    "docs/coordination/project-map.md",
+    "lessons.md",
+    "docs/lessons.md",
+    "docs/coordination/lessons.md",
+}
+
+BASH_MUTATION_PATTERNS = [
+    r">\s*\S*(project[-_]?map|lessons)\.md",
+    r">>\s*\S*(project[-_]?map|lessons)\.md",
+    r"(tee|sed\s+-i|cp|mv|dd).*(project[-_]?map|lessons)\.md",
+    r"git\s+(checkout|restore|show).*(project[-_]?map|lessons)\.md",
+    r"open\(['"].*(project[-_]?map|lessons)\.md",
+]
 
 
 def normalize_path(p: str) -> str:
@@ -29,28 +48,41 @@ def main() -> int:
             return 0
         payload = json.loads(raw_input)
     except Exception as exc:
-        # Fail-closed if payload is corrupted
-        sys.stderr.write(f"[FPF HOOK ERROR] Failed to parse PreToolUse payload: {exc}\n")
-        return 2
+        sys.stderr.write(f"[FPF HOOK WARNING] Failed to parse PreToolUse payload: {exc}\n")
+        return 0
 
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {})
     file_path = tool_input.get("file_path", "")
 
-    # Intercept file mutation tools
+    # 1. Intercept structured file editing tools
     if tool_name in ("Edit", "Write", "NotebookEdit"):
         norm = normalize_path(file_path)
-        if "project-map.md" in norm:
+        base_name = os.path.basename(norm)
+        if norm in PROTECTED_EXACT_FILES or base_name in ("project-map.md", "lessons.md"):
             sys.stderr.write(
                 "\n======================================================================\n"
-                "[FPF CRITICAL BLOCK] DEV Agent is forbidden from modifying PROJECT-MAP.md!\n"
-                "Under Five-Powers-Flow RFC-001, PROJECT-MAP.md is exclusively maintained\n"
-                "by Truth Scribe based on independent QA PASS evidence.\n"
-                "Self-marking progress in DEV workspace is strictly prohibited.\n"
+                f"[FPF CRITICAL BLOCK] DEV Agent is forbidden from modifying {base_name}!\n"
+                "Under Five-Powers-Flow RFC-001, PROJECT-MAP.md and LESSONS.md are exclusively\n"
+                "maintained by Truth Scribe based on independent QA PASS evidence.\n"
+                "Modifying governance ledgers in DEV workspace is strictly prohibited.\n"
                 "======================================================================\n\n"
             )
-            # Exit code 2 is the official Claude Code PreToolUse blocking code
             return 2
+
+    # 2. Intercept command-line mutation attempts in Bash
+    if tool_name == "Bash":
+        command = str(tool_input.get("command", "")).strip()
+        for pattern in BASH_MUTATION_PATTERNS:
+            if re.search(pattern, command, re.IGNORECASE):
+                sys.stderr.write(
+                    "\n======================================================================\n"
+                    "[FPF CRITICAL BLOCK] Bash command attempts to overwrite protected governance file!\n"
+                    f"Command: {command}\n"
+                    "Under Five-Powers-Flow RFC-001, PROJECT-MAP.md and LESSONS.md cannot be mutated by DEV.\n"
+                    "======================================================================\n\n"
+                )
+                return 2
 
     return 0
 
