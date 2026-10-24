@@ -1,4 +1,4 @@
-name: Validate Schemas and Specs
+name: Validate Schemas, Specs and Run Boundary Tests
 
 on:
   push:
@@ -33,3 +33,8 @@ jobs:
               jsonschema.Draft7Validator.check_schema(data)
               print(f'Valid schema: {path}')
           "
+
+      - name: Run Trusted Evaluator Boundary Tests
+        run: |
+          export PYTHONPATH=.
+          python -m unittest discover -s tests -p "test_*.py"
