@@ -11,7 +11,7 @@
 1. **第一层：客户端机械阻断 (Local PreToolUse Hooks & Read-Only Tools)**  
    在模型发起写操作时，毫秒级直接在本地拦截阻断，避免跑偏或污染本地文件。
 2. **第二层：服务端法定防线 (Server-Side Branch Protection & CI Checks)**  
-   无论客户端如何使用 `--no-verify` 或绕过 Hook，GitHub 远端的分支保护规则与强制 Status Check 绝不放行，确保主干安全绝对可靠。
+   无论客户端如何使用 `--no-verify` 或绕过 Hook，GitHub 远端的分支保护规则（Required Status Checks、enforce_admins、CODEOWNERS）形成防御后盾，确保未经审核的代码绝不放行。
 
 ---
 
@@ -38,7 +38,7 @@ Claude Code 的 `Explore` 和 `Plan` 子代理类型，其工具集里**硬性�
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|NotebookEdit",
+        "matcher": "Edit|Write|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",

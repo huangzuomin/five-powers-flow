@@ -1,0 +1,25 @@
+{
+  "manifest_version": 1,
+  "task_id": "FPF-CORE-001",
+  "profile": "Library",
+  "items": [
+    {
+      "id": "EVID-01",
+      "path": "unit.log",
+      "sha256": "f21aec5878fca5bbc1e9904ecff6c1372b10cfb5c88a80652da52225312a3227",
+      "status": "PASS"
+    },
+    {
+      "id": "EVID-04",
+      "path": "exit_codes.log",
+      "sha256": "b02fec61bf5272135353da6b07732a27ca60370303bd058deb6bbec9a5e99d1e",
+      "status": "PASS"
+    },
+    {
+      "id": "EVID-09",
+      "path": "lint.log",
+      "sha256": "19ea8ca0fac2f3ad462499209be3fc47c332f22d50e8e31eb1684d9c8b460c7a",
+      "status": "PASS"
+    }
+  ]
+}

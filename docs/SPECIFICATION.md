@@ -40,7 +40,7 @@
 
 ### 2.1 跨异构 Agent 异步通信总线 (Universal Asynchronous Message Bus)
 - **破除厂商壁垒**：参与项目的智能体往往来自不同模型平台（如 ChatGPT 网页版、Claude CLI、本地 Codex、DeepSeek 专有模型等），它们之间无局域网互通、无跨厂商 RPC。
-- **全异步可靠载体**：GitHub Issue、PR 描述、Issue 评论（Comment）是所有 Agent 唯一允许交换任务与结果的媒介。所有通信均采用标准的 `WORK_ORDER`、`DEV_HANDOFF`、`QA_RESULT` 结构化 YAML 区块，自带时间戳，异步持久化，永不丢失。
+- **全异步可靠载体**：GitHub Issue、PR 描述、Issue 评论（Comment）是所有 Agent 唯一允许交换任务与结果的媒介。所有通信均采用标准的 `WORK_ORDER`、`DEV_HANDOFF`、`QA_RESULT`、`MAP_UPDATE` 结构化 YAML 区块，自带时间戳，异步持久化，永不丢失。
 
 ### 2.2 不可篡改的法定证据链 (Tamper-Evident Canonical Ledger)
 - **对抗上下文压缩与遗忘**：聊天上下文会随着对话轮次增加被自动 Compact 或发生模型幻觉，但 GitHub 上的 Git Commit、代码 Diff、提交记录具备密码学哈希保证（40 位 SHA）。
@@ -82,7 +82,7 @@
 
 ### 3.4 ④ QA 总指挥 (Independent Auditor)
 - **法定权力**：审核切片提测入场门禁（Admission Gate）；独立设计对抗用例与真实业务消融；核验原始测试日志与哈希锚点；出具法定裁决卡片（`PASS` / `FAIL` / `BLOCKED` / `INVALID_TEST`）。
-- **法定禁令**：严禁修改被测业务代码；严禁在存在 P0 缺陷时签署 PASS；严禁脱离 DEV 卡片出具孤立验收。
+- **法定禁令**：严禁修改被测业务代码；严禁在存在 P0 缺陷时签署 PASS；严禁脱离 DEV 卡片出具孤立验收；DEV 与 QA 签名者身份严禁重叠。
 
 ### 3.5 ⑤ 项目地图总控 (Truth & Ledger Scribe)
 - **法定权力**：维护仓库唯一正式项目地图（`PROJECT-MAP.md`）；根据可信裁决器计算出的正式 PASS 结果提出纯文档 PR。
@@ -92,19 +92,144 @@
 - **属性**：中立、无业务裁决权的状态机执行器与密码学强校验引擎。
 - **计算职责**：
   1. 物理检查 DEV 提测 SHA 与 QA 验收 SHA 严格一致（`tested_sha == tested_code_sha`）；
-  2. 物理检查 SHA 在 Git 对象库中必须属于 `commit` 类型对象；
-  3. 物理读取 `manifest.json` 并重新计算 SHA-256 哈希，核对是否与卡片一致；
-  4. 检查是否存在未解决的 `findings.p0` 缺陷；
-  5. 只有上述所有检查全部无误，才计算输出 `QA_PASSED_AWAITING_OWNER_MERGE` 状态。
+  2. 物理检查 SHA 在 Git 对象库中必须属于 `commit` 类型对象（`git cat-file -t == commit`）；
+  3. 物理核对 baseline_sha 是 tested_code_sha 的祖先，且变更文件列表与实际 diff 完全一致；
+  4. 物理读取 `manifest.json` 并重新计算 SHA-256 哈希，核对是否与卡片一致；
+  5. 检查是否存在未解决的 `findings.p0` 缺陷及非零退出码；
+  6. 只有上述所有检查全部无误，才计算输出 `QA_PASSED_AWAITING_OWNER_MERGE` 状态。
 
 ---
 
-## 4. 双 PR 原子顺序与防漂移规则 (Dual-PR Ordering & Anti-Drift)
+## 4. 标准交接契约格式 (Standard Hand-off Contracts)
 
-为消灭“代码 PR 尚未合并、地图 PR 先行合并导致状态漂移”的重大隐患，协议强制确立以下顺序与绑定约束：
+数据与控制信号必须通过公开、受版本控制的结构化卡片传递，严禁依赖不透明的聊天上下文摘要。
 
-1. **严格合并次序 (Strict Sequential Merging)**：
-   - **第一步**：人类负责人必须先合并**代码 PR**，在主干生成确定的 `MERGE_COMMIT_SHA`；
-   - **第二步**：地图总控获取该主干 `MERGE_COMMIT_SHA`，写入 `PROJECT-MAP.md` 的归档凭据中；
-   - **第三步**：人类负责人合并**地图 PR**。
-2. **禁止颠倒次序**：服务端 CI 门禁将物理检查：若对应的代码 PR 尚未合并，地图 PR 严禁合并。
+### 4.1 DEV 交付卡 (`DEV_HANDOFF`)
+由 DEV 工位在完成切片自测后，随 PR 描述或 Issue 提交。契约由 `schemas/dev-handoff.schema.json` 强校验：
+```yaml
+handoff_version: 1
+kind: "DEV_HANDOFF"
+task_id: "G2-01-DEV-016"
+baseline_sha: "40位十六进制commit-hash"       # 必须为 tested_code_sha 的物理祖先
+tested_code_sha: "40位十六进制commit-hash"    # 必须为当前 PR HEAD 的物理提交
+author: "dev-agent-or-engineer"              # 签署者标识，严禁与 QA 重叠
+pr_url: "https://github.com/owner/repo/pull/12"
+scope: "切片实施摘要"
+changed_files:
+  - "path/to/modified/file.py"               # 必须完全覆盖实际 git diff
+dev_checks:
+  - command: "pytest tests/unit"
+    exit_code: 0
+not_run:                                     # 严禁留空；若声明 100% 覆盖需提供 exemption_justification
+  - "e2e-browser-matrix"
+not_run_exemption_justification: ""          # 仅在 not_run 为空时必填（最低 15 字符）
+known_risks:
+  - "已知边界缺陷或遗留风险"
+state: "DEV_READY_FOR_QA"                    # 枚举: DEV_READY_FOR_QA | DEV_BLOCKED
+```
+
+### 4.2 QA 裁决卡 (`QA_RESULT`)
+由 QA 总指挥在独立工位完成回归后签署在 Issue 或 PR 评审中。契约由 `schemas/qa-result.schema.json` 强校验：
+```yaml
+result_version: 1
+kind: "QA_RESULT"
+task_id: "G2-01-DEV-016"
+tested_sha: "40位十六进制commit-hash"        # 必须与 DEV tested_code_sha 严格一致
+runner_sha: "40位十六进制commit-hash"        # QA 执行脚本所在 commit，必须存在
+qa_contract_sha: "40位十六进制commit-hash"   # 验收契约文件所在 commit，必须存在
+author: "qa-auditor-identity"               # 签署者标识，严禁与 DEV 重叠
+profile: "Library"                          # 枚举: Library | API-DB | Full-Stack | Rework
+environment: "Ubuntu 22.04 LTS, Python 3.11"
+verdict: "PASS"                             # 枚举: PASS | FAIL | BLOCKED | NOT_RUN | INVALID_TEST
+evidence_manifest_sha256: "64位十六进制哈希"  # docs/evidence/manifest.json 的物理重算哈希
+checks:
+  - name: "unit_and_integration"
+    command: "pytest tests/"
+    exit_code: 0                            # verdict 为 PASS 时所有 checks exit_code 必须为 0
+findings:
+  p0: []                                    # 若包含 P0 缺陷，verdict 严禁为 PASS
+  p1: []
+  p2: []
+next_action: "REQUEST_OWNER_MERGE_AND_MAP_UPDATE"
+```
+
+### 4.3 地图更新卡 (`MAP_UPDATE`)
+由地图总控随纯文档 PR 发起。契约由 `validate-handoff-cards.yml` 强校验：
+```yaml
+kind: "MAP_UPDATE"
+task_id: "G2-01-DEV-016"
+code_pr_number: 12                          # 已合并的代码 PR 编号
+code_merged_sha: "40位十六进制commit-hash"   # 已实际合并入 main 的 commit SHA
+scribe: "project-map-scribe"
+```
+
+---
+
+## 5. 物理隔离纪律 (Physical Isolation Rules)
+
+1. **工作树物理隔离 (Worktree Isolation)**：  
+   DEV 工位与 QA 工位必须工作在相互独立的物理路径（如通过 `git worktree add` 挂载），严禁在同一个目录中交替执行修改。
+2. **环境与数据隔离 (Disposable State Isolation)**：  
+   自动化测试必须运行在轻量沙箱、独立临时数据库（随机端口）、干净虚拟环境中，测试完毕即刻清理，严禁复用污染。
+3. **代码写权限隔离 (Read-Only Code Base for QA)**：  
+   QA 工位严禁对被测源码拥有写权限。在 Claude Code 中推荐将 QA 设定为只读型子代理（`Explore` 模式）或通过 PreToolUse Hook 阻断。
+
+---
+
+## 6. 核心质量门禁与反证机制 (Quality Gates & Evidence Discipline)
+
+### 6.1 门禁左移与预检 (`pre-handoff`)
+DEV 提测前必须在本地通过四道物理门禁（`packages/fpf-gates/pre_handoff.py`）：
+1. **工作树纯净性**：工作树无 untracked 或未暂存脏文件；
+2. **治理防线无窜写**：严禁修改 `PROJECT-MAP.md` 与 `LESSONS.md`；
+3. **元数据 SHA 祖先有效性**：验证 baseline 是 tested 的真实祖先，且变更文件匹配；
+4. **敏感产物审计**：扫描代码与 diff，硬性阻断明文 AWS Key、OpenAI Token、GitHub PAT 及私钥。
+
+### 6.2 变异对抗反证 (Red Check)
+- 在任何缺陷修复轮次（Bug-Fix / Rework），强制要求执行 Red Check（变异对抗反证）：
+- 将修复后的代码回退至缺陷版本时，该测试用例必须**明确失败**（退出码非 0）。
+- 杜绝因测试编写不严谨或断言缺失而产生的“空跑假绿灯”。
+
+### 6.3 错题本制度 (Lessons-Learned Discipline & Seen 3× 晋升)
+1. 设立仓库根目录治理文件 `docs/coordination/LESSONS.md`。
+2. **录入流程**：DEV 总指挥归纳 $\rightarrow$ QA 总指挥核验事实背书 $\rightarrow$ 人类负责人核准入库。
+3. **Seen 3× 自动晋升**：同一类缺陷在 3 个不同切片中复犯，**强制自动晋升为 CI 自动化对抗门禁用例**。
+4. **刚性约束**：智能体任务书与 `AGENTS.md` 强制约定：“编码前必须查阅错题本，复犯已知缺陷直接判 DEV FAIL”。
+
+### 6.4 32 项证据包与分级 Profile 契约 (Evidence Pack & Profiles)
+详见 [docs/EVIDENCE-SPEC.md](EVIDENCE-SPEC.md)。QA 签署 PASS 必须基于物理证据目录 `docs/evidence/` 中的 `manifest.json`：
+- **PROFILE-LIBRARY**：基础代码库，必须覆盖 A、C、D、H 类核心凭据（EVID-01, EVID-04, EVID-09 等）；
+- **PROFILE-API-DB**：服务与数据库切片，追加事务凭据与随机端口日志（EVID-02, EVID-05）；
+- **PROFILE-FULLSTACK**：全栈切片，追加端到端浏览器渲染与真实接口抓包（EVID-03）；
+- **PROFILE-REWORK**：返工切片，强制追加红绿变异反证（EVID-25）。
+manifest 文件的每一项必须在磁盘上真实存在，且 SHA-256 严丝合缝。
+
+---
+
+## 7. 双 PR 制衡与原子顺序 (Dual-PR Ordering & Anti-Drift Workflow)
+
+为消灭“代码 PR 尚未合并、地图 PR 先行合并导致状态漂移”以及“DEV 在代码 PR 中自改项目地图完工”的重大隐患，协议确立以下流程：
+
+### 7.1 代码 PR 与地图 PR 职能分离 (Separation of Concerns)
+- **代码 PR**：仅允许修改功能代码与测试用例，**严禁修改 `PROJECT-MAP.md` 或 `LESSONS.md`**。若检测到混合修改，CI 直接硬阻断并报错退出。
+- **地图 PR**：仅允许修改项目地图与错题本等治理文件，必须包含 `MAP_UPDATE` 卡片，且必须锚定一个已经真正合并入主干的代码 commit SHA。
+
+### 7.2 严格合并次序 (Strict Sequential Merging)
+1. **第一步（合并代码）**：人类负责人核验 QA PASS 凭证，在 GitHub 上点击 Squash Merge 代码 PR，在主干生成确定的 `MERGE_COMMIT_SHA`；
+2. **第二步（提交地图）**：地图总控 Scribe 获取该主干 `MERGE_COMMIT_SHA`，写入地图凭据并提交纯文档地图 PR；
+3. **第三步（合并地图）**：CI 门禁自动核验 `code_merged_sha` 确系 `main` 分支的祖先提交后放行，人类负责人点击合并地图 PR。
+
+### 7.3 服务端法定防线 (Server-Side Branch Protection)
+- `main` 主干开启 GitHub 分支保护规则：
+  - 强制开启 `required_status_checks`（必须通过 `validate` 与 `validate-card`）；
+  - 强制开启 `enforce_admins: true`；
+  - 强制启用 `require_code_owner_reviews: true`（保护治理路径归属）；
+  - 禁用强制推送（`allow_force_pushes: false`）与分支删除（`allow_deletions: false`）。
+
+### 7.4 人类极简终审 (One-page Sovereign Briefing)
+通过负责人代理 Agent，将海量运行日志收敛为“一页纸红绿简报”，向人类呈现：
+- 切片 ID 与功能范围；
+- 提测 SHA 与 QA 验收 SHA 对齐凭据；
+- QA 测试结论、覆盖率与未测试项（`not_run`）；
+- 阻断性风险与合并建议。
+人类决策者仅需据此签署最终决策，将宝贵的人类注意力集中在关键的商业和架构把关上。

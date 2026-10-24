@@ -67,7 +67,7 @@ jobs:
           body = os.environ.get("PR_BODY") or ""
           base_sha = os.environ.get("BASE_SHA") or "main"
 
-          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*MAP_UPDATE[\s\S]*?)```", body, re.IGNORECASE)
+          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*['\"]?MAP_UPDATE['\"]?[\s\S]*?)```", body, re.IGNORECASE)
           if not m:
               print("::error::[FPF GATE BLOCK] MAP_PR body must include a ```yaml MAP_UPDATE ... ``` card.")
               print("Required fields: kind: MAP_UPDATE, code_pr_number, code_merged_sha, scribe.")
@@ -108,7 +108,7 @@ jobs:
           body = os.environ.get("PR_BODY") or ""
           head_sha = str(os.environ.get("PR_HEAD_SHA") or "").strip().lower()
 
-          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*DEV_HANDOFF[\s\S]*?)```", body, re.IGNORECASE)
+          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*['\"]?DEV_HANDOFF['\"]?[\s\S]*?)```", body, re.IGNORECASE)
           if not m:
               print("::error::[FPF P0-01 GATE FAILURE] CODE_PR body is MISSING a mandatory DEV_HANDOFF card!")
               print("Under FPF RFC-001, code pull requests without DEV_HANDOFF are strictly prohibited from merging.")
@@ -138,3 +138,36 @@ jobs:
         run: |
           export PYTHONPATH=.
           python -m packages.fpf_coordinator.coordinator --dev-card dev-card.yml --check-git
+
+      - name: Extract, Validate and Authenticate QA_RESULT Card (if present)
+        if: steps.classify-pr.outputs.pr_type == 'CODE_PR'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python - <<'PY'
+          import os, re, sys, pathlib, yaml, json, jsonschema
+
+          body = os.environ.get("PR_BODY") or ""
+          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*['\"]?QA_RESULT['\"]?[\s\S]*?)```", body, re.IGNORECASE)
+          if not m:
+              print("ℹ️ No QA_RESULT card present in PR body yet (awaiting independent QA review).")
+              sys.exit(0)
+
+          card_yaml = m.group(1).strip()
+          pathlib.Path("qa-card.yml").write_text(card_yaml, encoding="utf-8")
+
+          schema = json.loads(pathlib.Path("schemas/qa-result.schema.json").read_text(encoding="utf-8"))
+          card_data = yaml.safe_load(card_yaml)
+          jsonschema.Draft7Validator(schema).validate(card_data)
+          print("✅ QA_RESULT satisfies JSON Schema draft-07 contract.")
+          PY
+
+      - name: Run QA Cryptographic Verification (if QA_RESULT present)
+        if: steps.classify-pr.outputs.pr_type == 'CODE_PR' && hashFiles('qa-card.yml') != ''
+        run: |
+          export PYTHONPATH=.
+          EVID_ARG=""
+          if [ -d "docs/evidence" ]; then
+            EVID_ARG="--evidence-dir docs/evidence"
+          fi
+          python -m packages.fpf_coordinator.coordinator --dev-card dev-card.yml --qa-card qa-card.yml $EVID_ARG --check-git

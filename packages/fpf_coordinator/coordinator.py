@@ -123,6 +123,16 @@ def verify_evidence_directory(
             errors.append("Evidence manifest.json 'items' list cannot be empty! Zero evidence items cannot substantiate QA.")
             return errors
 
+        # Validate manifest.json against schemas/manifest.schema.json if available
+        schema_path = Path(__file__).resolve().parent.parent.parent / "schemas" / "manifest.schema.json"
+        if schema_path.is_file():
+            try:
+                import jsonschema
+                schema_doc = json.loads(schema_path.read_text(encoding="utf-8"))
+                jsonschema.Draft7Validator(schema_doc).validate(manifest_data)
+            except Exception as s_exc:
+                errors.append(f"manifest.json violates schemas/manifest.schema.json: {s_exc}")
+
         target_profile = str(profile or "Library").strip()
         if target_profile not in REQUIRED_PROFILE_EVIDENCES:
             target_profile = "Library"
@@ -133,6 +143,13 @@ def verify_evidence_directory(
         for item in items:
             evid_id = str(item.get("id", "UNKNOWN")).strip()
             declared_evid_ids.add(evid_id)
+            status = str(item.get("status", "PASS")).upper()
+            if status == "NOT_APPLICABLE":
+                reason = str(item.get("reason", "")).strip()
+                if len(reason) < 10:
+                    errors.append(f"{evid_id}: NOT_APPLICABLE status requires architectural justification in 'reason' (min 10 chars)")
+                continue
+
             rel_path = item.get("path")
             expected_sha = item.get("sha256")
             if not rel_path or not expected_sha:
@@ -163,7 +180,7 @@ def extract_yaml_block(text: str, marker: str = "DEV_HANDOFF") -> str:
     """Extract standard YAML blocks enclosed in ```yaml ... ``` from text."""
     if not text:
         return ""
-    pattern = re.compile(rf"```ya?ml\s*([\s\S]*?kind:\s*{marker}[\s\S]*?)```", re.IGNORECASE)
+    pattern = re.compile(rf"```ya?ml\s*([\s\S]*?kind:\s*['\"]?{marker}['\"]?[\s\S]*?)```", re.IGNORECASE)
     match = pattern.search(text)
     if match:
         return match.group(1).strip()
@@ -397,10 +414,20 @@ def main() -> int:
     parser.add_argument("--qa-card", help="Path to YAML file containing QA_RESULT")
     parser.add_argument("--qa-text", help="Raw text (Issue comment) containing a QA_RESULT code block")
     parser.add_argument("--evidence-dir", help="Path to evidence directory containing manifest.json")
+    parser.add_argument("--manifest", help="Direct path to manifest.json file (resolves containing evidence directory)")
     parser.add_argument("--check-git", action="store_true", help="Physically verify commit objects in local git tree")
     parser.add_argument("--verify-pr-merge", help="PR number or URL to physically verify merge state via GitHub API/CLI")
     parser.add_argument("--pr-merged", action="store_true", help="Assert PR is merged into main branch (verified via git)")
     args = parser.parse_args()
+
+    if args.manifest and not args.evidence_dir:
+        m_p = Path(args.manifest)
+        if m_p.is_file():
+            args.evidence_dir = str(m_p.parent)
+        elif m_p.is_dir():
+            args.evidence_dir = str(m_p)
+        else:
+            args.evidence_dir = str(m_p.parent)
 
     repo_path = Path.cwd() if args.check_git else None
     dev_errors = []

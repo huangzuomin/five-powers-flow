@@ -115,7 +115,7 @@ python packages/fpf-gates/pre_handoff.py --base main
 ### 2. 验证交接卡与 SHA 链条一致性
 协调中枢对提测卡与质检卡进行机器级强验证：
 ```bash
-python packages/fpf-coordinator/coordinator.py --dev-card dev_handoff.yaml --qa-card qa_result.yaml --check-git
+python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-card qa_result.yaml --evidence-dir docs/evidence --check-git
 ```
 脚本将验证：
 - 卡片所有必填字段与 Schema 约束；
@@ -123,7 +123,14 @@ python packages/fpf-coordinator/coordinator.py --dev-card dev_handoff.yaml --qa-
 - **QA 验收的 `tested_sha` 是否与 DEV 提测 SHA 严格绝对一致**；
 - 两个 SHA 是否在本地 Git 对象库中真实存在。
 
-### 3. 在你的新项目中植入规范
+### 3. 第一个 PR 走通标准闭环 (First Walkthrough via Protocol)
+1. **DEV 发起分支与开发**：在独立 worktree 或特性分支开发，本地运行 `python packages/fpf-gates/pre_handoff.py --base main`；
+2. **提交代码 PR**：在 PR 描述中填入合规 `DEV_HANDOFF` 卡片；CI 自动触发并验证卡片与 SHA 绑定；
+3. **QA 独立工位验收**：检出 PR 分支，执行对抗验证，输出 `docs/evidence/` 与 `manifest.json`，在评论中签署 `QA_RESULT`；
+4. **人类终审与 Squash Merge**：人类负责人核查红绿简报并在 GitHub 点击 Merge，主干生成正式提交 SHA；
+5. **地图总控发起地图 PR**：根据代码 commit SHA 提交包含 `MAP_UPDATE` 的纯文档 PR，经 CI 验证祖先关系后由人类合入主干。
+
+### 4. 在你的新项目中植入规范
 1. 复制 `templates/` 下的模板文件到你的工程：
    - 将 `AGENTS.md.template` 放置于仓库根目录 `AGENTS.md`；
    - 将 `PROJECT-MAP.md.template`、`LESSONS.md.template` 放置于 `docs/coordination/`；
@@ -152,10 +159,13 @@ five-powers-flow/
 │   ├── SPECIFICATION.md                # FPF-RFC-001 协议规范完整条令 (v1.2.1)
 │   ├── EVIDENCE-SPEC.md                # 32 项标准证据包规范 (四级分级 Profile)
 │   └── CLAUDE-CODE-GUIDE.md            # Claude Code 机械强制落地指南
+├── .claude/
+│   └── settings.json                   # Claude Code 原生 PreToolUse 钩子治理配置
 ├── schemas/                            # 机器可读的 JSON / YAML 契约规范 (Draft-07)
 │   ├── work-order.schema.json          # 架构工作令 Schema
-│   ├── dev-handoff.schema.json         # 研发交付卡 Schema (含 minItems 强制)
-│   ├── qa-result.schema.json           # 质检裁决卡 Schema (强制 runner/contract SHA)
+│   ├── dev-handoff.schema.json         # 研发交付卡 Schema (含 not_run 矩阵与 SHA 强制)
+│   ├── qa-result.schema.json           # 质检裁决卡 Schema (强制 exit_code 验证与双向 SHA)
+│   ├── manifest.schema.json            # 32 项证据包清册 Schema (Profile 强制)
 │   └── coordination-ledger.schema.json # 调度协调账本 Schema
 ├── templates/                          # 开箱即用的项目模板套件
 │   ├── AGENTS.md.template              # 通用仓库智能体红线规范
@@ -166,7 +176,7 @@ five-powers-flow/
 ├── tests/
 │   └── test_trusted_evaluator.py       # 密码学断言与安全边界单元测试套件
 └── packages/                           # 核心门禁与验证器实现
-    ├── fpf-coordinator/coordinator.py  # 协调器与密码学 SHA/作用域/证据包强校验器
+    ├── fpf_coordinator/coordinator.py  # 协调器与密码学 SHA/作用域/证据包强校验器
     └── fpf-gates/pre_handoff.py        # 交付前四道机械门禁检查器 (含敏感产物审计)
 ```
 
