@@ -32,7 +32,7 @@ BASH_MUTATION_PATTERNS = [
     r">>\s*\S*(project[-_]?map|lessons)\.md",
     r"(tee|sed\s+-i|cp|mv|dd).*(project[-_]?map|lessons)\.md",
     r"git\s+(checkout|restore|show).*(project[-_]?map|lessons)\.md",
-    r"open\(['"].*(project[-_]?map|lessons)\.md",
+    r"open\(['\"].*(project[-_]?map|lessons)\.md",
 ]
 
 

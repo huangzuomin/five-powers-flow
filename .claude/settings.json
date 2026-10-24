@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python packages/fpf-gates/hook_guard_dev.py"
+            "command": "python packages/fpf_gates/hook_guard_dev.py"
           }
         ]
       }

@@ -42,7 +42,7 @@ Claude Code 的 `Explore` 和 `Plan` 子代理类型，其工具集里**硬性�
         "hooks": [
           {
             "type": "command",
-            "command": "python packages/fpf-gates/hook_guard_dev.py"
+            "command": "python packages/fpf_gates/hook_guard_dev.py"
           }
         ]
       }
@@ -57,7 +57,7 @@ Claude Code 的 `Explore` 和 `Plan` 子代理类型，其工具集里**硬性�
 - **退出码 `2`**：**标准物理阻断**，工具调用被中止，标准错误输出（stderr）将作为错误信息回传给智能体，迫使其感知法定红线；
 - 退出码 `1`：一般性脚本异常退出。
 
-### 3. 拦截实现脚本 (`packages/fpf-gates/hook_guard_dev.py`)
+### 3. 拦截实现脚本 (`packages/fpf_gates/hook_guard_dev.py`)
 该脚本已内置于本仓库：
 - 标准化匹配 Windows 与 POSIX 路径分隔符与大小写；
 - 遇到尝试向 `PROJECT-MAP.md` 写入时，向 stderr 输出拦截警告并返回退出码 `2`，实现严密阻断。

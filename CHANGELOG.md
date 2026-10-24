@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 - **Restoration of Specification Body (§4–§7) (Issue #18)**: Fully restored and hardened §4 Standard Hand-off Contracts (`DEV_HANDOFF`, `QA_RESULT`, `MAP_UPDATE`), §5 Physical Isolation Rules, §6 Quality Gates & Red Check, §7 Dual-PR Ordering & Anti-Drift Workflow in `docs/SPECIFICATION.md`.
-- **PreToolUse Hook Guard Expansion & Bash Interception (Issue #17)**: `packages/fpf-gates/hook_guard_dev.py` now protects both `PROJECT-MAP.md` and `LESSONS.md`, and intercepts common mutation commands in `Bash` (`>`, `>>`, `tee`, `sed -i`, `cp`, `git checkout`). Added in-tree configuration `.claude/settings.json`.
+- **PreToolUse Hook Guard Expansion & Bash Interception (Issue #17)**: `packages/fpf_gates/hook_guard_dev.py` now protects both `PROJECT-MAP.md` and `LESSONS.md`, and intercepts common mutation commands in `Bash` (`>`, `>>`, `tee`, `sed -i`, `cp`, `git checkout`). Added in-tree configuration `.claude/settings.json`.
 - **Evidence Manifest Schema & Directory (Issue #19, #20, #21)**: Added `schemas/manifest.schema.json` with formal Draft-07 schema for 32 evidence items and Profiles; established canonical reference evidence directory `docs/evidence/` with sample manifest, logs, and cards.
 - **Dual-PR Workflow Routing (P0-01, P0-02)**: Dedicated CI workflow separation for `MAP_PR` vs `CODE_PR`. Code PRs are strictly rejected if missing `DEV_HANDOFF` card or touching governance files; Map PRs are anchored to merged Code commit ancestors (`code_merged_sha`).
 - **PR Head SHA Binding (P1-01)**: Server-side CI validates that `DEV_HANDOFF.tested_code_sha` strictly matches `github.event.pull_request.head.sha`.

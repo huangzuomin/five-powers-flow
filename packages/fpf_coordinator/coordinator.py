@@ -150,12 +150,15 @@ def verify_evidence_directory(
                     errors.append(f"{evid_id}: NOT_APPLICABLE status requires architectural justification in 'reason' (min 10 chars)")
                 continue
 
-            rel_path = item.get("path")
+            rel_path = str(item.get("path", "")).strip()
             expected_sha = item.get("sha256")
             if not rel_path or not expected_sha:
                 errors.append(f"{evid_id}: Manifest item missing 'path' or 'sha256'")
                 continue
-            item_file = evidence_dir / rel_path
+            item_file = (evidence_dir / rel_path).resolve()
+            if not str(item_file).startswith(str(evidence_dir.resolve())):
+                errors.append(f"{evid_id}: Path traversal forbidden: '{rel_path}' escapes evidence directory")
+                continue
             if not item_file.is_file():
                 errors.append(f"{evid_id}: Missing physical evidence file '{rel_path}'")
                 continue
@@ -196,6 +199,9 @@ def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None)
         if val is None or val == "":
             errors.append(f"DEV card missing required scalar field: '{field}'")
 
+    if str(data.get("kind", "")).strip() != "DEV_HANDOFF":
+        errors.append(f"DEV card 'kind' must be 'DEV_HANDOFF', got: '{data.get('kind')}'")
+
     baseline_sha = str(data.get("baseline_sha", "")).strip()
     if not HEX_SHA_RE.match(baseline_sha):
         errors.append(f"baseline_sha must be a 40-digit hex SHA, got: '{baseline_sha}'")
@@ -221,6 +227,9 @@ def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None)
                 missing_files = actual_diff_files - declared_files
                 if missing_files:
                     errors.append(f"changed_files omitted {len(missing_files)} actual diff file(s): {sorted(missing_files)[:5]}")
+                extra_files = declared_files - actual_diff_files
+                if extra_files:
+                    errors.append(f"changed_files declared {len(extra_files)} file(s) not in actual diff: {sorted(extra_files)[:5]}")
 
     changed_files = data.get("changed_files")
     if not isinstance(changed_files, list) or not changed_files:
@@ -269,6 +278,9 @@ def validate_qa_result(
         val = qa_data.get(field)
         if val is None or str(val).strip() == "":
             errors.append(f"QA card missing required field: '{field}'")
+
+    if str(qa_data.get("kind", "")).strip() != "QA_RESULT":
+        errors.append(f"QA card 'kind' must be 'QA_RESULT', got: '{qa_data.get('kind')}'")
 
     tested_sha = str(qa_data.get("tested_sha", "")).strip()
     if not HEX_SHA_RE.match(tested_sha):
