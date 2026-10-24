@@ -32,3 +32,5 @@ Thumbs.db
 .env.local
 *.local.json
 coordination-ledger.local.json
+.fpf-runtime/
+.fpf-state/

@@ -1,4 +1,4 @@
-"""Durable single-slice state transitions and append-only local event log."""
+"""Durable local single-slice ledger; event history retained for human diagnosis."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -9,7 +9,7 @@ import sqlite3
 
 ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 TERMINAL = {"READY_FOR_OWNER_REVIEW", "BLOCKED", "BLOCKED_RECONCILIATION"}
-IN_FLIGHT = {"PLAN_RUNNING", "DEV_RUNNING", "QA_RUNNING"}
+IN_FLIGHT = {"PLAN_RUNNING", "DEV_RUNNING", "QA_RUNNING", "PUBLISH_RUNNING"}
 
 
 class Ledger:
@@ -30,9 +30,12 @@ class Ledger:
             if found["goal"] != goal or found["base_sha"] != base_sha:
                 raise ValueError("Slice ID is already used with a different goal/base")
             return found
-        state = {"id": slice_id, "goal": goal, "base_sha": base_sha, "head_sha": None,
-                 "phase": "NEW", "attempt": 0, "max_attempts": max_attempts,
-                 "sessions": {}, "dev_order": "", "qa_plan": "", "last_failure": "", "report": ""}
+        state = {
+            "id": slice_id, "goal": goal, "base_sha": base_sha, "head_sha": None,
+            "phase": "NEW", "attempt": 0, "max_attempts": max_attempts,
+            "sessions": {}, "dev_order": "", "qa_plan": "", "last_failure": "",
+            "report": "", "pr_url": "", "evidence_path": "", "evidence_sha256": ""
+        }
         try:
             with self.conn:
                 self.conn.execute("INSERT INTO slices VALUES (?,?)",
