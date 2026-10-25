@@ -58,7 +58,7 @@ class TestTrustedQACollector(unittest.TestCase):
     def test_failed_subprocess_rejected(self):
         self.commands["EVID-01"]=[sys.executable,"-c","raise SystemExit(7)"]
         self.plan.write_text(json.dumps({"commands":self.commands}),encoding="utf-8")
-        with self.assertRaisesRegex(ValueError,"nonzero exit"):
+        with self.assertRaisesRegex(ValueError,"exit did not match trusted expected exit"):
             collect(self.plan,self.repo,self.out,"T001",self.sha,"Library")
 
     def test_red_replay_requires_expected_nonzero_failure(self):
