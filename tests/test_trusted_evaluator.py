@@ -63,6 +63,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             "not_run": ["e2e full regression"],
             "known_risks": [],
             "state": "DEV_READY_FOR_QA",
+            "author": "dev-test",
         }
 
     def tearDown(self):
@@ -74,7 +75,7 @@ class TestTrustedEvaluator(unittest.TestCase):
         errors = coordinator.validate_dev_handoff(bad_dev, repo_path=self.repo_path)
         self.assertTrue(any("not_run is empty" in e for e in errors))
 
-    def test_p2_1_not_run_with_exemption_justification_accepted(self):
+    def test_audit_35_not_run_exemption_justification_is_rejected(self):
         """P2-1: not_run empty is accepted if legitimate exemption justification is provided."""
         valid_exempt_dev = {
             **self.dev_card,
@@ -82,7 +83,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             "not_run_exemption_justification": "Verified 100% boundary testing across unit and integration matrix in CI.",
         }
         errors = coordinator.validate_dev_handoff(valid_exempt_dev, repo_path=self.repo_path)
-        self.assertFalse(any("not_run is empty" in e for e in errors))
+        self.assertTrue(any("not_run is empty" in e for e in errors))
 
     def test_issue_3_baseline_non_ancestor_is_rejected(self):
         """Issue #3: If baseline is not an ancestor of tested, it must be rejected."""
@@ -209,7 +210,8 @@ class TestTrustedEvaluator(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             items_decl = []
-            for evid_id, fname in [("EVID-01", "unit.log"), ("EVID-04", "exit_codes.log"), ("EVID-09", "lint.log")]:
+            for evid_id in coordinator.REQUIRED_PROFILE_EVIDENCES["Library"]:
+                fname = evid_id + ".log"
                 f = tmppath / fname
                 f.write_text(f"log data for {evid_id}", encoding="utf-8")
                 h = hashlib.sha256(f.read_bytes()).hexdigest()
@@ -230,8 +232,8 @@ class TestTrustedEvaluator(unittest.TestCase):
                 "kind": "QA_RESULT",
                 "task_id": "TEST-CI-001",
                 "tested_sha": self.head_sha,
-                "runner_sha": self.head_sha,
-                "qa_contract_sha": self.head_sha,
+                "runner_sha": self.parent_sha,
+                "qa_contract_sha": self.parent_sha,
                 "profile": "Library",
                 "environment": "Ubuntu 22.04",
                 "verdict": "PASS",
@@ -239,6 +241,7 @@ class TestTrustedEvaluator(unittest.TestCase):
                 "checks": [{"name": "pytest", "exit_code": 0}],
                 "findings": {},
                 "next_action": "MERGE",
+                "author": "qa-test",
             }
 
             errs = coordinator.validate_qa_result(qa_card, dev_data=self.dev_card, repo_path=self.repo_path, evidence_dir=tmppath)

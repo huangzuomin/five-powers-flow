@@ -19,14 +19,7 @@ import sys
 
 HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
-PROTECTED_EXACT_FILES = {
-    "project-map.md",
-    "docs/project-map.md",
-    "docs/coordination/project-map.md",
-    "lessons.md",
-    "docs/lessons.md",
-    "docs/coordination/lessons.md",
-}
+from packages.fpf_policy.protected import is_protected
 
 SENSITIVE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),               # AWS Access Key
@@ -85,7 +78,11 @@ def gate_3_project_map_anti_tamper(base_branch: str = "main") -> bool:
         changed_files = [f.strip() for f in out.splitlines() if f.strip()]
         for f in changed_files:
             norm_path = os.path.normpath(f).replace("\\", "/").lower()
-            if norm_path in PROTECTED_EXACT_FILES:
+            try:
+                protected = is_protected(norm_path)
+            except ValueError:
+                protected = True
+            if protected:
                 print(f"[CRITICAL FAIL Gate 3] Anti-Tamper Block: DEV branch modified protected file '{f}'!")
                 print("  -> Under Five-Powers-Flow RFC-001, PROJECT-MAP.md and LESSONS.md are exclusively maintained by Scribe.")
                 print("  -> Self-marking results in DEV PR is strictly forbidden.")

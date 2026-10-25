@@ -15,7 +15,8 @@
     "dev_checks",
     "not_run",
     "known_risks",
-    "state"
+    "state",
+    "author"
   ],
   "properties": {
     "handoff_version": {
@@ -89,7 +90,8 @@
       "items": {
         "type": "string"
       },
-      "description": "List of untested areas/boundaries. If empty, not_run_exemption_justification is mandatory."
+      "description": "List of untested areas/boundaries. If empty, not_run_exemption_justification is mandatory.",
+      "minItems": 1
     },
     "known_risks": {
       "type": "array",
@@ -104,10 +106,11 @@
         "DEV_BLOCKED"
       ]
     },
-    "not_run_exemption_justification": {
+    "author": {
       "type": "string",
-      "minLength": 15,
-      "description": "Mandatory scope/matrix justification when claiming 100% boundary testing with empty not_run."
+      "minLength": 2,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]+$"
     }
-  }
+  },
+  "additionalProperties": false
 }

@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from packages.fpf_policy.protected import is_protected
 
 from .adapters import commit_dev_changes, ensure_qa_worktree, git, run_command
 from .evidence import write_qa_evidence
@@ -92,8 +93,7 @@ class SliceRuntime:
                 if head == expected or git(self.dev, "status", "--porcelain"):
                     return self.ledger.save(state, "BLOCKED", "DEV produced no clean new commit")
                 changed = git(self.dev, "diff", "--name-only", expected + ".." + head).splitlines()
-                if not changed or any(Path(p).name.lower() in ("project-map.md", "lessons.md")
-                                      for p in changed):
+                if not changed or any(is_protected(p) for p in changed):
                     return self.ledger.save(state, "BLOCKED", "Protected path in DEV change")
                 check = run_command(self.dev_check, self.dev, self.timeout)
                 state["head_sha"] = head
