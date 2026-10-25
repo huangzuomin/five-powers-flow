@@ -155,7 +155,7 @@ class SliceRuntime:
                 if self.qa_evidence_dir and check.code == 0 and verdict["verdict"] == "PASS":
                     external = self.qa_evidence_dir / task_id / sha
                     collected = {}
-                    for eid in sorted(REQUIRED_PROFILE_EVIDENCES[self.qa_profile] - {"EVID-31", "EVID-32"}):
+                    for eid in sorted(set(REQUIRED_PROFILE_EVIDENCES[self.qa_profile]) - {"EVID-31", "EVID-32"}):
                         candidates = list(external.glob(eid + ".*")) if external.is_dir() else []
                         if len(candidates) != 1:
                             raise RuntimeError(eid + " must have exactly one physical external QA file")
