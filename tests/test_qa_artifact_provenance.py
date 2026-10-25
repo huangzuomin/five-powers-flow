@@ -55,7 +55,8 @@ class TestIndependentQAArtifact(unittest.TestCase):
 
     def verify(self, body, run=None, artifact=None):
         run = run if run is not None else self.run
-        artifact = artifact if artifact is not None else self.artifact
+        artifact = artifact if artifact is not None else {**self.artifact,
+            "digest":"sha256:" + hashlib.sha256(body).hexdigest()}
 
         def api(repo, path, token):
             if path == "actions/runs/1001":

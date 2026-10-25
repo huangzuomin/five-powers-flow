@@ -97,7 +97,7 @@ class TestSixthAudit(unittest.TestCase):
             source=root/"source"
             source.mkdir()
             physical={}
-            for eid in coordinator.REQUIRED_PROFILE_EVIDENCES["Library"] - {"EVID-31","EVID-32"}:
+            for eid in set(coordinator.REQUIRED_PROFILE_EVIDENCES["Library"]) - {"EVID-31","EVID-32"}:
                 path=source/(eid+".log")
                 path.write_text("Observed QA execution "+eid)
                 physical[eid]=path
