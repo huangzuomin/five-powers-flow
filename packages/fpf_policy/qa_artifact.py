@@ -91,7 +91,9 @@ def independent_qa_evidence(*, repo: str, qa: dict, reviewer: str,
         raise ValueError("Artifact identity, lifetime or SHA-specific name mismatch")
     data = download_zip(repo, artifact_id, token)
     digest = str(artifact.get("digest") or "")
-    if digest.startswith("sha256:") and hashlib.sha256(data).hexdigest() != digest[7:]:
+    if not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest):
+        raise ValueError("GitHub artifact digest missing or invalid; refusing unbound bytes")
+    if hashlib.sha256(data).hexdigest() != digest[7:].lower():
         raise ValueError("GitHub-provided artifact digest does not match ZIP")
     with tempfile.TemporaryDirectory(prefix="fpf-independent-qa-") as tmp:
         root = Path(tmp)
@@ -108,7 +110,11 @@ def independent_qa_evidence(*, repo: str, qa: dict, reviewer: str,
                 total += item.file_size
                 if total > 30 * 1024 * 1024:
                     raise ValueError("Expanded QA artifact is too large")
-                (root / name).write_bytes(archive.read(item))
+                with archive.open(item) as member:
+                    payload = member.read(10 * 1024 * 1024 + 1)
+                if len(payload) > 10 * 1024 * 1024 or len(payload) != item.file_size:
+                    raise ValueError("QA artifact ZIP member expanded beyond allowed size")
+                (root / name).write_bytes(payload)
         manifest_path = root / "manifest.json"
         if not manifest_path.is_file():
             raise ValueError("QA ZIP missing manifest.json")

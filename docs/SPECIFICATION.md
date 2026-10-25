@@ -48,10 +48,10 @@
 
 ### 2.3 无中心数据库的状态机表面 (Database-less Public State Machine)
 - 整个自驱动流水线无需维护专用的外部中心数据库或分布式协调器。
-- 切片的生命周期状态（`pending-dev` $\rightarrow$ `dev-ready` $\rightarrow$ `qa-reviewing` $\rightarrow$ `qa-passed` $\rightarrow$ `awaiting-merge`）直接投射为 GitHub Issue/PR 的 **Labels、状态标记与评论流**。协调器通过轮询 GitHub 即可完成 100% 确定性的状态判定。
+- 切片的生命周期状态（`pending-dev` $\rightarrow$ `dev-ready` $\rightarrow$ `qa-reviewing` $\rightarrow$ `qa-passed` $\rightarrow$ `awaiting-merge`）直接投射为 GitHub Issue/PR 的 **Labels、状态标记与评论流**。协调器依据 GitHub API 与可信证据作状态判定；其有效性取决于权限配置、API 可用性及验收证据的完整程度。
 
 ### 2.4 主权隔离与权限物理防火墙 (Constitutional Sovereign Firewall)
-- **代码不可侵犯闸门**：GitHub 的 **分支保护规则 (Branch Protection Rules)** 与 **强制审查 (Required Reviews)**，是物理上锁死“人类最高决策权不可被 Agent 篡夺”的最后防线。
+- **代码不可侵犯闸门**：GitHub 的 **分支保护规则 (Branch Protection Rules)** 与 **强制审查 (Required Reviews)**，仅在启用强制状态检查和 required_approving_review_count >= 1 等真实保护设置时，才构成可执行的审批边界。
 - 无论 Agent 自我宣称多么完美、测试多么绿灯，只要人类未在 GitHub 网页或客户端点击 **Confirm Merge**，受保护的 `main` 分支在正确配置审批策略时减少 AI 擅自合并和污染生产代码。
 
 ### 2.5 物理工位环境纯净锚点 (Clean Workspace Anchor)
@@ -60,7 +60,7 @@
 
 ### 2.6 双 PR 制衡法定执行场 (Dual-PR Separation Field)
 - **代码 PR**（DEV 发起）包含业务代码与自测代码；**地图 PR**（地图总控发起）仅修改 `docs/coordination/PROJECT-MAP.md`。
-- GitHub 的 PR 分离机制物理上杜绝了 DEV 智能体在提交代码时“顺手修改项目地图宣布完工”的自改试卷行为。
+- GitHub 的 PR 分离机制配合受保护路径、服务端 CI 与独立审批，能够阻止未授权的 DEV 直接修改正式地图；仅将文件拆到两个 PR 并不足以保证隔离。
 
 ---
 
@@ -120,7 +120,7 @@ changed_files:
 dev_checks:
   - command: "pytest tests/unit"
     exit_code: 0
-not_run:                                     # 严禁留空；若声明 100% 覆盖需提供 exemption_justification
+not_run:                                     # 必填且非空；记录未覆盖边界，不允许自签豁免
   - "e2e-browser-matrix"
 # not_run 需要显式列出尚未覆盖的边界；不得以自由文本豁免
 known_risks:
@@ -198,7 +198,7 @@ DEV 提测前必须在本地通过四道物理门禁（`packages/fpf_gates/pre_h
 
 ### 6.4 32 项证据包与分级 Profile 契约 (Evidence Pack & Profiles)
 详见 [docs/EVIDENCE-SPEC.md](EVIDENCE-SPEC.md)。QA 签署 PASS 必须基于物理证据目录 `<独立 QA 证据目录>/` 中的 `manifest.json`：
-- **PROFILE-LIBRARY**：基础代码库，必须覆盖 A、C、D、H 类核心凭据（EVID-01, EVID-04, EVID-09 等）；
+- **PROFILE-LIBRARY**：基础代码库，必须覆盖 A(01–04)、B(05–08)、C(09/10/12)、D(13)、H(29–32)，共 16 项；
 - **PROFILE-API-DB**：服务与数据库切片，追加事务凭据与随机端口日志（EVID-02, EVID-05）；
 - **PROFILE-FULLSTACK**：全栈切片，追加端到端浏览器渲染与真实接口抓包（EVID-21～24）；
 - **PROFILE-REWORK**：返工切片，强制追加红绿变异反证（EVID-25）。

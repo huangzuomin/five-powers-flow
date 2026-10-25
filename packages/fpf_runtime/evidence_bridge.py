@@ -21,7 +21,10 @@ def export_fpf_manifest(outside_dev: Path, files_by_evid: dict[str, Path],
     root.mkdir(parents=True, exist_ok=True)
     if not task_id or "/" in task_id or "\\" in task_id:
         raise ValueError("Invalid task ID")
-    mandatory = set(REQUIRED_PROFILE_EVIDENCES[profile])
+    generated = {"EVID-31", "EVID-32"}
+    mandatory = set(REQUIRED_PROFILE_EVIDENCES[profile]) - generated
+    if generated.intersection(files_by_evid):
+        raise ValueError("EVID-31/EVID-32 are owned by trusted QA evidence exporter")
     if not mandatory.issubset(files_by_evid):
         raise ValueError("QA runner did not produce required EVIDs: " +
                          str(sorted(mandatory - set(files_by_evid))))
@@ -38,6 +41,19 @@ def export_fpf_manifest(outside_dev: Path, files_by_evid: dict[str, Path],
         digest = hashlib.sha256(dest.read_bytes()).hexdigest()
         entries.append({"id": evid_id, "path": dest.name,
                         "sha256": digest, "status": "PASS"})
+    index = root / "EVID-31.json"
+    if index.exists():
+        raise ValueError("Refusing to overwrite QA evidence index")
+    index.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+    anchor = root / "EVID-32.sha256"
+    if anchor.exists():
+        raise ValueError("Refusing to overwrite QA evidence anchor")
+    anchor.write_text(hashlib.sha256(index.read_bytes()).hexdigest() +
+                      "  EVID-31.json\n", encoding="utf-8")
+    for evid_id, source in (("EVID-31", index), ("EVID-32", anchor)):
+        entries.append({"id": evid_id, "path": source.name,
+                        "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                        "status": "PASS"})
     manifest = {"manifest_version": 1, "task_id": task_id,
                 "profile": profile, "items": entries}
     if tested_sha is not None:

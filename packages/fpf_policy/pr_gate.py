@@ -74,13 +74,13 @@ def yaml_card(body: str, wanted: str) -> dict:
 
 
 def verified_reviewer(reviews: list[dict], pr_author: str, sha: str) -> tuple[str, dict]:
-    """Most recent review per authenticated login controls current approval."""
+    """Newest review *value* per authenticated login controls approval."""
     latest = {}
     for item in reviews:
         actor = str((item.get("user") or {}).get("login") or "").casefold()
         if actor:
             latest[actor] = item
-    for actor, review in reversed(list(latest.items())):
+    for actor, review in latest.items():
         if actor == pr_author.casefold():
             continue
         if str(review.get("state")).upper() != "APPROVED":
@@ -105,7 +105,7 @@ def verified_reviewer(reviews: list[dict], pr_author: str, sha: str) -> tuple[st
 
 def authenticated_approval(reviews: list[dict], pr_author: str,
                            sha: str) -> str:
-    """For BOOTSTRAP/MAP/POLICY: current-SHA platform approval, not QA_PASS."""
+    """For non-code PRs, use latest authenticated review value per login."""
     latest = {}
     for review in reviews:
         actor = str((review.get("user") or {}).get("login") or "").casefold()
@@ -123,16 +123,20 @@ def authenticated_approval(reviews: list[dict], pr_author: str,
 def gh_reviews(repo_slug: str, pr_num: int, token: str) -> list[dict]:
     if not token:
         raise ValueError("GitHub read token required")
-    url = f"https://api.github.com/repos/{repo_slug}/pulls/{pr_num}/reviews?per_page=100"
-    req = Request(url, headers={"Authorization": "Bearer " + token,
-                                "Accept": "application/vnd.github+json"})
-    with urlopen(req, timeout=25) as resp:
-        data = json.load(resp)
-    if not isinstance(data, list):
-        raise ValueError("GitHub review response was not a list")
-    if len(data) >= 100:
-        raise ValueError("Too many reviews; pagination must be audited")
-    return data
+    all_reviews = []
+    for page in range(1, 101):
+        url = (f"https://api.github.com/repos/{repo_slug}/pulls/{pr_num}/reviews"
+               f"?per_page=100&page={page}")
+        req = Request(url, headers={"Authorization": "Bearer " + token,
+                                    "Accept": "application/vnd.github+json"})
+        with urlopen(req, timeout=25) as resp:
+            data = json.load(resp)
+        if not isinstance(data, list) or len(data) > 100:
+            raise ValueError("Invalid GitHub reviews page " + str(page))
+        all_reviews.extend(data)
+        if len(data) < 100:
+            return all_reviews
+    raise ValueError("Review pagination exceeded 10000 items; audit required")
 
 
 def git_cmd(*args: str) -> str:
