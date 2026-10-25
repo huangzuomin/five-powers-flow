@@ -164,7 +164,12 @@ def rollback(repo: Path, workspace_root: Path, project_id: str) -> dict:
                 and ".git" not in file.relative_to(path).parts
             }
             expected = set(candidate) | {".git"}
+            tracked = set(git(repo, "ls-tree", "-r", "--name-only", sha).splitlines())
             for name in actual:
+                if name in tracked:
+                    if git(path, "status", "--porcelain", "--", name):
+                        raise RuntimeError("Modified tracked file; rollback refused: " + name)
+                    continue
                 if name not in expected:
                     raise RuntimeError("Unexpected user file; rollback refused: " + name)
                 if (path / name).read_text(encoding="utf-8") != candidate[name]:
