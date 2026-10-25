@@ -66,6 +66,8 @@ class FakeGh(GhDraftPublisher):
     def _gh(self, repo, *args):
         if args[:2] == ("repo", "view"):
             return '{"nameWithOwner": "example/example"}'
+        if args[:2] == ("api", "user"):
+            return "fpftest-author"
         if args[:2] == ("pr", "list"):
             return "[]"
         if args[:2] == ("auth", "status"):
@@ -158,6 +160,7 @@ class TestIntegratedSlice(unittest.TestCase):
         marker = chr(96) * 3
         handoff = yaml.safe_load(publisher.body.split(marker + "yaml\n", 1)[1].split(marker, 1)[0])
         self.assertEqual(handoff["kind"], "DEV_HANDOFF")
+        self.assertEqual(handoff["author"], "fpftest-author")
         self.assertEqual(handoff["tested_code_sha"], result["head_sha"])
         self.assertEqual(handoff["baseline_sha"], self.base)
         self.assertEqual(handoff["changed_files"], ["feature.txt"])
