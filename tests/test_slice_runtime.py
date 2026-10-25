@@ -150,7 +150,8 @@ class TestSliceRuntime(unittest.TestCase):
     def test_cli_windows_path_shlex_preserves_backslashes(self):
         import shlex
         cmd_str = r"python -m unittest D:\foo\bar"
-        args_win = shlex.split(cmd_str, posix=sys.platform != "win32")
+        # On Windows (posix=False), shlex.split preserves backslashes instead of stripping them
+        args_win = shlex.split(cmd_str, posix=False)
         self.assertIn(r"D:\foo\bar", args_win)
 
 
