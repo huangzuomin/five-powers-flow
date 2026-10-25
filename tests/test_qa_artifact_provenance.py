@@ -39,7 +39,7 @@ class TestIndependentQAArtifact(unittest.TestCase):
         src = self.root / "original"
         src.mkdir()
         physical = {}
-        for evid in REQUIRED_PROFILE_EVIDENCES["Library"]:
+        for evid in REQUIRED_PROFILE_EVIDENCES["Library"] - {"EVID-31", "EVID-32"}:
             file = src / (evid + ".log")
             file.write_text("Real separate QA command log for " + evid, encoding="utf-8")
             physical[evid] = file
