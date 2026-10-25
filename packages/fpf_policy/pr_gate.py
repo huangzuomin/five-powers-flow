@@ -27,6 +27,28 @@ MAP_FILES = frozenset({"project-map.md", "lessons.md",
                        "docs/coordination/project-map.md",
                        "docs/coordination/lessons.md"})
 
+def _policy_scope(changed: set[str]) -> str:
+    """Governing workflow changes require the GATE_PR route, never prose waiver."""
+    prose = {"readme.md", "changelog.md", "contributing.md", "security.md"}
+    if any(not (p in prose or p.startswith(("docs/", "tests/", "templates/"))
+                or is_protected(p)) for p in changed):
+        raise ValueError("POLICY_CHANGE contains unrelated application files")
+    if any(is_protected(p) or p.startswith(("tests/", "templates/")) for p in changed):
+        return "GATE_PR"
+    return "POLICY_PR"
+
+def _exact_card_diff(card: dict, files: list[str], sha: str, base: str) -> None:
+    if str(card.get("tested_code_sha") or "").lower() != sha:
+        raise ValueError("POLICY_CHANGE tested_code_sha must equal authenticated PR HEAD")
+    if str(card.get("baseline_sha") or "").lower() != base:
+        raise ValueError("POLICY_CHANGE baseline_sha must equal authenticated PR base")
+    listed = card.get("changed_files")
+    if not isinstance(listed, list) or not all(isinstance(x, str) for x in listed):
+        raise ValueError("POLICY_CHANGE changed_files required")
+    if len(listed) != len(set(listed)) or set(map(normalize_repo_path, listed)) != set(map(normalize_repo_path, files)):
+        raise ValueError("POLICY_CHANGE changed_files differ from authenticated Git diff")
+
+
 
 def classify(paths: list[str], kind: str, baseline_files: set[str],
              branch: str) -> str:
@@ -49,8 +71,7 @@ def classify(paths: list[str], kind: str, baseline_files: set[str],
             raise ValueError("BOOTSTRAP cannot overwrite existing baseline files")
         return "BOOTSTRAP_PR"
     if kind == "POLICY_CHANGE":
-        # Changes to protected gate definitions are not normal CODE_PR.
-        return "POLICY_PR"
+        return _policy_scope(changed_set)
     if kind == "MAP_UPDATE":
         if changed_set - MAP_FILES:
             raise ValueError("MAP_PR contains non-map paths")
@@ -74,13 +95,13 @@ def yaml_card(body: str, wanted: str) -> dict:
 
 
 def verified_reviewer(reviews: list[dict], pr_author: str, sha: str) -> tuple[str, dict]:
-    """Most recent review per authenticated login controls current approval."""
+    """Newest review *value* per authenticated login controls approval."""
     latest = {}
     for item in reviews:
         actor = str((item.get("user") or {}).get("login") or "").casefold()
         if actor:
             latest[actor] = item
-    for actor, review in reversed(list(latest.items())):
+    for actor, review in latest.items():
         if actor == pr_author.casefold():
             continue
         if str(review.get("state")).upper() != "APPROVED":
@@ -91,7 +112,8 @@ def verified_reviewer(reviews: list[dict], pr_author: str, sha: str) -> tuple[st
             qa = yaml_card(review.get("body") or "", "QA_RESULT")
         except (ValueError, yaml.YAMLError):
             continue
-        if str(qa.get("author") or "").casefold() != actor:
+        qa_author = str(qa.get("author") or "").casefold()
+        if qa_author not in (actor, actor.removesuffix("[bot]")):
             continue
         if str(qa.get("tested_sha") or "").lower() != sha.lower():
             continue
@@ -105,7 +127,7 @@ def verified_reviewer(reviews: list[dict], pr_author: str, sha: str) -> tuple[st
 
 def authenticated_approval(reviews: list[dict], pr_author: str,
                            sha: str) -> str:
-    """For BOOTSTRAP/MAP/POLICY: current-SHA platform approval, not QA_PASS."""
+    """For non-code PRs, use latest authenticated review value per login."""
     latest = {}
     for review in reviews:
         actor = str((review.get("user") or {}).get("login") or "").casefold()
@@ -123,21 +145,25 @@ def authenticated_approval(reviews: list[dict], pr_author: str,
 def gh_reviews(repo_slug: str, pr_num: int, token: str) -> list[dict]:
     if not token:
         raise ValueError("GitHub read token required")
-    url = f"https://api.github.com/repos/{repo_slug}/pulls/{pr_num}/reviews?per_page=100"
-    req = Request(url, headers={"Authorization": "Bearer " + token,
-                                "Accept": "application/vnd.github+json"})
-    with urlopen(req, timeout=25) as resp:
-        data = json.load(resp)
-    if not isinstance(data, list):
-        raise ValueError("GitHub review response was not a list")
-    if len(data) >= 100:
-        raise ValueError("Too many reviews; pagination must be audited")
-    return data
+    all_reviews = []
+    for page in range(1, 101):
+        url = (f"https://api.github.com/repos/{repo_slug}/pulls/{pr_num}/reviews"
+               f"?per_page=100&page={page}")
+        req = Request(url, headers={"Authorization": "Bearer " + token,
+                                    "Accept": "application/vnd.github+json"})
+        with urlopen(req, timeout=25) as resp:
+            data = json.load(resp)
+        if not isinstance(data, list) or len(data) > 100:
+            raise ValueError("Invalid GitHub reviews page " + str(page))
+        all_reviews.extend(data)
+        if len(data) < 100:
+            return all_reviews
+    raise ValueError("Review pagination exceeded 10000 items; audit required")
 
 
 def git_cmd(*args: str) -> str:
     p = subprocess.run(["git", *args], capture_output=True, text=True,
-                       timeout=30, cwd=os.environ.get("GITHUB_WORKSPACE") or None,
+                       timeout=30, cwd=os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or None,
                        check=False)
     if p.returncode:
         raise ValueError("Git verification error: " + p.stderr[-400:])
@@ -164,15 +190,46 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
     kind = cards[0]
     card = yaml_card(body,kind)
     pr_type = classify(files,kind,baseline_files,branch)
-    reviewer = authenticated_approval(reviews, author, sha)
-    if pr_type == "CODE_PR":
+    if pr_type in ("CODE_PR", "GATE_PR"):
         reviewer, qa = verified_reviewer(reviews, author, sha)
+    else:
+        reviewer = authenticated_approval(reviews, author, sha)
+    if pr_type == "GATE_PR":
+        _exact_card_diff(card, files, sha, base)
+        if card.get("risk_acknowledged") is not True:
+            raise ValueError("GATE_PR must explicitly acknowledge policy risk")
+        if str(qa.get("task_id")) != str(card.get("task_id")):
+            raise ValueError("GATE_PR QA task ID mismatch")
+        latest = {}
+        for review in reviews:
+            actor = str((review.get("user") or {}).get("login") or "").casefold()
+            if actor:
+                latest[actor] = review
+        second = [actor for actor, review in latest.items()
+                  if actor not in {author.casefold(), reviewer.casefold()}
+                  and str(review.get("state") or "").upper() == "APPROVED"
+                  and str(review.get("commit_id") or "").lower() == sha]
+        if not second:
+            raise ValueError("GATE_PR requires second independent APPROVED review")
+        from packages.fpf_policy.qa_artifact import independent_qa_evidence
+        repo_dir = Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
+        with independent_qa_evidence(repo=os.environ["GITHUB_REPOSITORY"], qa=qa,
+                reviewer=reviewer, tested_sha=sha, task_id=str(card["task_id"]),
+                token=os.environ.get("GH_TOKEN",""), repository_dir=repo_dir) as evidence_dir:
+            errs = coordinator.validate_qa_result(qa, dev_data={
+                "task_id":card["task_id"],"author":author,
+                "baseline_sha":base,"tested_code_sha":sha},
+                repo_path=repo_dir,evidence_dir=evidence_dir)
+            if errs:
+                raise ValueError("GATE_PR independent QA rejected: " + "; ".join(errs))
+        return "GATE_PR independently QA verified and dual-approved"
+    if pr_type == "CODE_PR":
         if str(card.get("author") or "").casefold() != author.casefold():
             raise ValueError("DEV_HANDOFF.author must equal platform PR author")
         if str(card.get("tested_code_sha") or "").lower() != sha:
             raise ValueError("DEV_HANDOFF head SHA mismatch")
         errs = coordinator.validate_dev_handoff(
-            card, repo_path=Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd()))
+            card, repo_path=Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd()))
         if errs:
             raise ValueError("DEV_HANDOFF invalid: " + "; ".join(errs))
         if str(qa.get("task_id")) != str(card.get("task_id")):
@@ -180,7 +237,7 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
         if str(qa.get("runner_sha")) == sha or str(qa.get("qa_contract_sha")) == sha:
             raise ValueError("QA toolchain must be pinned independently of PR tested code")
         from packages.fpf_policy.qa_artifact import independent_qa_evidence
-        repo_dir = Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
+        repo_dir = Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
         with independent_qa_evidence(
             repo=os.environ["GITHUB_REPOSITORY"], qa=qa,
             reviewer=reviewer, tested_sha=sha,
@@ -207,8 +264,10 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
         if subprocess.run(["git","merge-base","--is-ancestor",code_sha,base],
                           check=False).returncode:
             raise ValueError("MAP_UPDATE code_merged_sha is not merged into target base")
-    if pr_type == "POLICY_PR" and str(card.get("risk_acknowledged")).lower() != "true":
-        raise ValueError("POLICY_CHANGE must explicitly acknowledge governance risk")
+    if pr_type == "POLICY_PR":
+        _exact_card_diff(card, files, sha, base)
+        if card.get("risk_acknowledged") is not True:
+            raise ValueError("POLICY_CHANGE must explicitly acknowledge governance risk")
     return pr_type + " independently reviewed by " + reviewer + " (identity only)"
 
 

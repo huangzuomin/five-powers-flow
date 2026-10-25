@@ -29,7 +29,7 @@ except ModuleNotFoundError:
 # Block common write operations targeting protected paths. This is advisory:
 # service-side PR gates remain mandatory because shell syntax is unbounded.
 BASH_MUTATION_PATTERNS = [
-    r"(?:>|>>|tee|sed\s+-i|cp\s+|mv\s+|dd\s+|git\s+(?:checkout|restore|show)\s+).*(?:agents\.md|project[-_]?map\.md|lessons\.md|handoff-protocol\.md|\.github/|\.fpf/|schemas/)",
+    r"(?:>|>>|tee|sed\s+-i|cp\s+|mv\s+|dd\s+|git\s+(?:checkout|restore|show)\s+)[^|;&\n]{0,200}(?:agents\.md|project[-_]?map\.md|lessons\.md|handoff-protocol\.md|\.github/|\.fpf/|schemas/)",
     r"(?:echo|printf|python|node|powershell|pwsh|cat)\b.*(?:>|>>)\s*.*(?:agents\.md|\.github/|\.fpf/|schemas/)",
 ]
 

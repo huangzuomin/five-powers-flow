@@ -39,7 +39,7 @@ class TestIndependentQAArtifact(unittest.TestCase):
         src = self.root / "original"
         src.mkdir()
         physical = {}
-        for evid in REQUIRED_PROFILE_EVIDENCES["Library"]:
+        for evid in set(REQUIRED_PROFILE_EVIDENCES["Library"]) - {"EVID-31", "EVID-32"}:
             file = src / (evid + ".log")
             file.write_text("Real separate QA command log for " + evid, encoding="utf-8")
             physical[evid] = file
@@ -55,7 +55,8 @@ class TestIndependentQAArtifact(unittest.TestCase):
 
     def verify(self, body, run=None, artifact=None):
         run = run if run is not None else self.run
-        artifact = artifact if artifact is not None else self.artifact
+        artifact = artifact if artifact is not None else {**self.artifact,
+            "digest":"sha256:" + hashlib.sha256(body).hexdigest()}
 
         def api(repo, path, token):
             if path == "actions/runs/1001":
@@ -75,6 +76,16 @@ class TestIndependentQAArtifact(unittest.TestCase):
 
     def test_trusted_run_and_exact_commit_artifact(self):
         self.verify(self.evidence_zip())
+
+    def test_missing_artifact_digest_fails_closed(self):
+        data = self.evidence_zip()
+        with self.assertRaisesRegex(ValueError, "digest missing"):
+            self.verify(data, artifact={**self.artifact, "digest": None})
+
+    def test_corrupt_artifact_digest_is_rejected(self):
+        data = self.evidence_zip()
+        with self.assertRaisesRegex(ValueError, "digest does not match"):
+            self.verify(data, artifact={**self.artifact, "digest": "sha256:" + "0" * 64})
 
     def test_wrong_review_actor_is_rejected(self):
         z=self.evidence_zip()
