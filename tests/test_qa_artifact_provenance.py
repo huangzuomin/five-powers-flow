@@ -76,6 +76,16 @@ class TestIndependentQAArtifact(unittest.TestCase):
     def test_trusted_run_and_exact_commit_artifact(self):
         self.verify(self.evidence_zip())
 
+    def test_missing_artifact_digest_fails_closed(self):
+        data = self.evidence_zip()
+        with self.assertRaisesRegex(ValueError, "digest missing"):
+            self.verify(data, artifact={**self.artifact, "digest": None})
+
+    def test_corrupt_artifact_digest_is_rejected(self):
+        data = self.evidence_zip()
+        with self.assertRaisesRegex(ValueError, "digest does not match"):
+            self.verify(data, artifact={**self.artifact, "digest": "sha256:" + "0" * 64})
+
     def test_wrong_review_actor_is_rejected(self):
         z=self.evidence_zip()
         with self.assertRaisesRegex(ValueError, "actor differs"):
