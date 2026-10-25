@@ -112,7 +112,8 @@ def verified_reviewer(reviews: list[dict], pr_author: str, sha: str) -> tuple[st
             qa = yaml_card(review.get("body") or "", "QA_RESULT")
         except (ValueError, yaml.YAMLError):
             continue
-        if str(qa.get("author") or "").casefold() != actor:
+        qa_author = str(qa.get("author") or "").casefold()
+        if qa_author not in (actor, actor.removesuffix("[bot]")):
             continue
         if str(qa.get("tested_sha") or "").lower() != sha.lower():
             continue
