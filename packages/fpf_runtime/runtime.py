@@ -9,9 +9,12 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from packages.fpf_policy.protected import is_protected
 
 from .adapters import commit_dev_changes, ensure_qa_worktree, git, run_command
 from .evidence import write_qa_evidence
+from .evidence_bridge import export_fpf_manifest
+from packages.fpf_coordinator.coordinator import REQUIRED_PROFILE_EVIDENCES, normalize_profile
 from .ledger import IN_FLIGHT, TERMINAL, Ledger
 
 
@@ -19,7 +22,8 @@ class SliceRuntime:
     def __init__(self, ledger: Ledger, roles: Any, codex: Any, dev_repo: Path,
                  qa_repo: Path, dev_check: list[str], qa_check: list[str],
                  timeout: int = 600, publisher: Any = None,
-                 evidence_root: Path | None = None):
+                 evidence_root: Path | None = None,
+                 qa_evidence_dir: Path | None = None, qa_profile: str = "Library"):
         dev, qa = dev_repo.resolve(), qa_repo.resolve()
         if (not dev_check or not qa_check or dev == qa or qa.is_relative_to(dev)
                 or dev.is_relative_to(qa)):
@@ -28,6 +32,13 @@ class SliceRuntime:
         self.dev, self.qa = dev, qa
         self.dev_check, self.qa_check, self.timeout = dev_check, qa_check, timeout
         self.publisher = publisher
+        self.qa_profile = normalize_profile(qa_profile)
+        self.qa_evidence_dir = qa_evidence_dir.resolve() if qa_evidence_dir else None
+        if self.qa_evidence_dir and (
+            self.qa_evidence_dir.is_relative_to(dev) or
+            self.qa_evidence_dir.is_relative_to(qa)
+        ):
+            raise ValueError("External QA evidence must be outside DEV/QA worktrees")
         self.evidence_root = (evidence_root or qa.parent / ".fpf-evidence").resolve()
         if self.evidence_root.is_relative_to(dev) or self.evidence_root.is_relative_to(qa):
             raise ValueError("Evidence directory must be outside both worktrees")
@@ -92,8 +103,7 @@ class SliceRuntime:
                 if head == expected or git(self.dev, "status", "--porcelain"):
                     return self.ledger.save(state, "BLOCKED", "DEV produced no clean new commit")
                 changed = git(self.dev, "diff", "--name-only", expected + ".." + head).splitlines()
-                if not changed or any(Path(p).name.lower() in ("project-map.md", "lessons.md")
-                                      for p in changed):
+                if not changed or any(is_protected(p) for p in changed):
                     return self.ledger.save(state, "BLOCKED", "Protected path in DEV change")
                 check = run_command(self.dev_check, self.dev, self.timeout)
                 state["head_sha"] = head
@@ -142,6 +152,21 @@ class SliceRuntime:
                     result.output, self.qa_check, check.code, check.output)
                 state["evidence_path"] = evidence_path
                 state["evidence_sha256"] = evidence_sha
+                if self.qa_evidence_dir and check.code == 0 and verdict["verdict"] == "PASS":
+                    external = self.qa_evidence_dir / task_id / sha
+                    collected = {}
+                    for eid in REQUIRED_PROFILE_EVIDENCES[self.qa_profile]:
+                        candidates = list(external.glob(eid + ".*")) if external.is_dir() else []
+                        if len(candidates) != 1:
+                            raise RuntimeError(eid + " must have exactly one physical external QA file")
+                        collected[eid] = candidates[0]
+                    exported, verified_sha = export_fpf_manifest(
+                        self.evidence_root / task_id / sha / "fpf",
+                        collected, task_id=task_id, profile=self.qa_profile,
+                        tested_sha=sha)
+                    state["fpf_manifest_path"] = exported
+                    state["fpf_manifest_sha256"] = verified_sha
+
                 if check.code or verdict["verdict"] != "PASS":
                     return self._failed(
                         state, "QA verdict=" + verdict["verdict"] +

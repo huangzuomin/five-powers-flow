@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 from typing import NamedTuple
+from packages.fpf_policy.protected import is_protected
 from urllib.request import Request, urlopen
 
 
@@ -170,7 +171,7 @@ def commit_dev_changes(repo: Path, expected: str, task_id: str, attempt: int) ->
         paths = git(repo, "diff", "--cached", "--name-only").splitlines()
     for path in paths:
         name = Path(path.strip('"')).name.lower()
-        if (name in _DENIED or name.startswith(".env")
+        if (is_protected(path) or name in _DENIED or name.startswith(".env")
                 or name.endswith((".key", ".pem", ".pfx", ".p12"))):
             raise RuntimeError("Protected or sensitive path changed: " + path)
     if head == expected:

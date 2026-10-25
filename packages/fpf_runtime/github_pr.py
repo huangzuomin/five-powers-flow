@@ -11,6 +11,7 @@ import tempfile
 import yaml
 from .adapters import git
 from .evidence import verify_qa_evidence
+from packages.fpf_policy.protected import is_protected
 
 
 class GhDraftPublisher:
@@ -45,8 +46,7 @@ class GhDraftPublisher:
                           cwd=repo, check=False).returncode:
             raise RuntimeError("Baseline is not an ancestor of tested head")
         files = git(repo, "diff", "--name-only", baseline + ".." + sha).splitlines()
-        if not files or any(Path(p).name.lower() in {"project-map.md", "lessons.md"}
-                            for p in files):
+        if not files or any(is_protected(p) for p in files):
             raise RuntimeError("No changes or protected governance files in Code PR")
 
         slug = json.loads(self._gh(repo, "repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
@@ -57,9 +57,12 @@ class GhDraftPublisher:
                              (not found[0]["isDraft"] or found[0]["baseRefName"] != self.base_branch)):
             raise RuntimeError("PR already exists in incompatible state")
 
+        actor = self._gh(repo, "api", "user", "--jq", ".login").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", actor):
+            raise RuntimeError("Could not authenticate GitHub PR author")
         card = {
             "handoff_version": 1, "kind": "DEV_HANDOFF", "task_id": state["id"],
-            "baseline_sha": baseline, "tested_code_sha": sha, "author": "fpf-dev-runtime",
+            "baseline_sha": baseline, "tested_code_sha": sha, "author": actor,
             "pr_url": found[0]["url"] if found else
                       "https://github.com/" + slug + "/pull/0",
             "scope": state["goal"][:500], "changed_files": files,

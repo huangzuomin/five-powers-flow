@@ -18,22 +18,21 @@ from pathlib import Path
 import re
 import sys
 
-PROTECTED_EXACT_FILES = {
-    "project-map.md",
-    "docs/project-map.md",
-    "docs/coordination/project-map.md",
-    "lessons.md",
-    "docs/lessons.md",
-    "docs/coordination/lessons.md",
-}
+try:
+    from packages.fpf_policy.protected import is_protected_tool_path
+except ModuleNotFoundError:
+    # Direct script execution (python packages/fpf_gates/*.py) must work
+    # without the caller manually setting PYTHONPATH.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from packages.fpf_policy.protected import is_protected_tool_path
 
+# Block common write operations targeting protected paths. This is advisory:
+# service-side PR gates remain mandatory because shell syntax is unbounded.
 BASH_MUTATION_PATTERNS = [
-    r">\s*\S*(project[-_]?map|lessons)\.md",
-    r">>\s*\S*(project[-_]?map|lessons)\.md",
-    r"(tee|sed\s+-i|cp|mv|dd).*(project[-_]?map|lessons)\.md",
-    r"git\s+(checkout|restore|show).*(project[-_]?map|lessons)\.md",
-    r"open\(['\"].*(project[-_]?map|lessons)\.md",
+    r"(?:>|>>|tee|sed\s+-i|cp\s+|mv\s+|dd\s+|git\s+(?:checkout|restore|show)\s+).*(?:agents\.md|project[-_]?map\.md|lessons\.md|handoff-protocol\.md|\.github/|\.fpf/|schemas/)",
+    r"(?:echo|printf|python|node|powershell|pwsh|cat)\b.*(?:>|>>)\s*.*(?:agents\.md|\.github/|\.fpf/|schemas/)",
 ]
+
 
 
 def normalize_path(p: str) -> str:
@@ -59,7 +58,7 @@ def main() -> int:
     if tool_name in ("Edit", "Write", "NotebookEdit"):
         norm = normalize_path(file_path)
         base_name = os.path.basename(norm)
-        if norm in PROTECTED_EXACT_FILES or base_name in ("project-map.md", "lessons.md"):
+        if is_protected_tool_path(file_path):
             sys.stderr.write(
                 "\n======================================================================\n"
                 f"[FPF CRITICAL BLOCK] DEV Agent is forbidden from modifying {base_name}!\n"

@@ -1,6 +1,7 @@
 # Five-Powers-Flow Server-Side Code Ownership
 # Enforces that critical governance and single-source-of-truth files
-# require explicit review from human sovereign or designated scribe.
+# identify expected governance reviewers. Actual blocking depends on the
+# native GitHub required_approving_review_count >= 1 configuration.
 
 PROJECT-MAP.md            @huangzuomin
 docs/coordination/PROJECT-MAP.md @huangzuomin
@@ -8,3 +9,11 @@ LESSONS.md                @huangzuomin
 docs/coordination/LESSONS.md     @huangzuomin
 docs/SPECIFICATION.md     @huangzuomin
 schemas/                  @huangzuomin
+
+/AGENTS.md @huangzuomin
+/.github/ @huangzuomin
+/.fpf/ @huangzuomin
+/packages/fpf_policy/ @huangzuomin
+/packages/fpf_coordinator/ @huangzuomin
+/packages/fpf_gates/ @huangzuomin
+/docs/coordination/ @huangzuomin

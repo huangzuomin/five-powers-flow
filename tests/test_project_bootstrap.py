@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 import yaml
+from unittest.mock import patch
 from packages.fpf_bootstrap.artifacts import bundle, map_text
 from packages.fpf_bootstrap.bootstrap import apply, doctor, layout, plan
 from packages.fpf_bootstrap.discovery import git
@@ -69,6 +70,12 @@ class TestProjectBootstrap(unittest.TestCase):
         self.assertEqual(git(self.repo, "status", "--porcelain"), "")
         self.assertEqual(git(Path(state["paths"]["qa"]), "branch", "--show-current"), "")
         self.assertTrue((Path(state["paths"]["bootstrap"]) / ".fpf/agents.yaml").exists())
+        root=Path(state["paths"]["bootstrap"])
+        self.assertTrue((root / ".fpf/vendor/packages/fpf_policy/qa_artifact.py").exists())
+        self.assertTrue((root / ".fpf/vendor/packages/fpf_policy/qa_collector.py").exists())
+        self.assertTrue((root / ".github/workflows/fpf-independent-qa.yml").exists())
+        runner=(root / ".github/workflows/fpf-independent-qa.yml").read_text()
+        self.assertIn("trusted/.fpf/vendor",runner)
 
     def test_rerun_is_idempotent_and_preserves_artifacts(self):
         proposal = self.proposal()
@@ -122,6 +129,45 @@ class TestProjectBootstrap(unittest.TestCase):
         cmd(directory, "git", "init")
         with self.assertRaises(RuntimeError):
             apply(self.repo, p)
+
+    def test_doctor_check_only_can_succeed_without_claiming_approval(self):
+        apply(self.repo, self.proposal())
+        status = doctor(self.repo, self.workspace, "DEMO01", require_ready=False)
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["state"], "BOOTSTRAP_REVIEW")
+        self.assertTrue(status["requires_approval"])
+
+    def test_partial_initialize_has_persistent_pending_record_and_safe_rollback(self):
+        from packages.fpf_bootstrap import bootstrap
+        proposal = self.proposal()
+        real_ensure = bootstrap._ensure_worktree
+        calls = [0]
+        def interrupted(repo, directory, branch, sha):
+            calls[0] += 1
+            if calls[0] == 3:
+                raise RuntimeError("QA disk unavailable")
+            return real_ensure(repo, directory, branch, sha)
+        with patch.object(bootstrap, "_ensure_worktree", side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError, "disk unavailable"):
+                apply(self.repo, proposal)
+        state = Path(proposal["paths"]["state"])
+        self.assertEqual(json.loads(state.read_text())["bootstrap_state"], "PENDING")
+        self.assertFalse(doctor(self.repo, self.workspace, "DEMO01", require_ready=False)["ok"])
+        self.assertEqual(bootstrap.rollback(self.repo, self.workspace, "DEMO01")["rollback"], "COMPLETE")
+        self.assertFalse(state.exists())
+        self.assertEqual(git(self.repo, "branch", "--show-current"), "main")
+
+    def test_rollback_preserves_custom_title_and_base_ref(self):
+        from packages.fpf_bootstrap import bootstrap
+        proposal = self.proposal()
+        apply(self.repo, proposal)
+        state_path = Path(proposal["paths"]["state"])
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["bootstrap_state"] = "PENDING"
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+        result = bootstrap.rollback(self.repo, self.workspace, "DEMO01")
+        self.assertEqual(result["rollback"], "COMPLETE")
+        self.assertFalse(state_path.exists())
 
     def test_invalid_project_id_refused(self):
         with self.assertRaises(ValueError):

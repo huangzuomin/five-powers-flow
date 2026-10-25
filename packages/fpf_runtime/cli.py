@@ -30,6 +30,9 @@ def main() -> int:
     p.add_argument("--publish-pr", action="store_true",
                    help="EXPLICITLY enable feature branch push and draft GitHub PR creation")
     p.add_argument("--base-branch", default="main")
+    p.add_argument("--qa-evidence-dir", type=Path,
+                   help="Independent runner EVID files: DIR/TASK/SHA/EVID-XX.ext")
+    p.add_argument("--qa-profile", default="Library")
     args = p.parse_args()
 
     ledger = Ledger(args.state_db.resolve())
@@ -66,7 +69,8 @@ def main() -> int:
             shlex.split(args.dev_check, posix=sys.platform != "win32"),
             shlex.split(args.qa_check, posix=sys.platform != "win32"),
             timeout=args.timeout, publisher=publisher,
-            evidence_root=args.state_db.resolve().parent / "evidence")
+            evidence_root=args.state_db.resolve().parent / "evidence",
+            qa_evidence_dir=args.qa_evidence_dir, qa_profile=args.qa_profile)
         state = runtime.run(args.task_id, max_steps=args.max_steps)
         print(json.dumps(
             {"state": state["phase"], "attempts": state["attempt"],

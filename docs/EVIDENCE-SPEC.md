@@ -2,7 +2,7 @@
 
 > **规范编号**：`FPF-SPEC-EVIDENCE-32`  
 > **所属协议**：FPF-RFC-001 v1.2.1  
-> **核心原则**：口说无凭，无原始日志与外部哈希锚点一律判定为 `INVALID_TEST`。  
+> **核心原则**：必须保留真实命令、退出码与原始输出；哈希验证字节一致性，不能单独证明执行者身份。  
 > **反教条分级**：按切片类型划分 Profile，严禁为了凑数伪造无意义假动作。
 
 ---
@@ -15,10 +15,10 @@
 | :--- | :--- | :--- | :--- |
 | **`PROFILE-LIBRARY`** | 纯算法、基础包、命令行工具 | A(元数据) + C(静态门禁) + D(依赖锁) + H(主锚点) | 数据库项(14~16, 20)、端到端项(21~24) |
 | **`PROFILE-API-DB`** | 后端服务、数据模型与持久层 | A + B(环境) + C + D(独立临时DB) + E(真实集成) + H | 浏览器项(21~24) |
-| **`PROFILE-FULLSTACK`** | 包含前台交互、完整业务流 | **全量 32 项完整执行**，含真实浏览器截图 | 无 |
-| **`PROFILE-REWORK`** | 任何缺陷修复轮次 (Bug-Fix) | 根据模块选择上述之一，**强制追加 G(红绿变异反证)** | 视基础 Profile 而定 |
+| **`PROFILE-FULLSTACK`** | 包含前台交互、完整业务流 | **A+B+C+D+E+F+H 共 28 项**，含真实浏览器截图；返工再加 G 类 | 无 |
+| **`PROFILE-REWORK`** | 任何缺陷修复轮次 (Bug-Fix) | 当前实现以 Library 核心项为基线，**强制追加 G(红绿变异反证)**；API-DB / Fullstack 返工组合 Profile 尚需设计 | 视基础 Profile 而定 |
 
-*注：在任何 Profile 中免除的项，必须在 `manifest.json` 中明确声明为 `STATUS: NOT_APPLICABLE` 并附带架构合理性说明。*
+*注：强制证据不得以 `NOT_APPLICABLE` 代替；非强制证据可声明不适用，但不得计入 Profile 的已验证覆盖。*
 
 ---
 
@@ -66,9 +66,15 @@
 在 FPF 验证器中，主锚点不再是纸面文本，而是必须能被物理重算：
 ```bash
 python -m packages.fpf_coordinator.coordinator \
-  --dev-card docs/evidence/dev_handoff.yaml \
-  --qa-card docs/evidence/qa_result.yaml \
-  --evidence-dir docs/evidence \
+  --dev-card <真实路径>/dev_handoff.yaml \
+  --qa-card <真实路径>/qa_result.yaml \
+  --evidence-dir <真实 QA 证据目录> \
   --check-git
 ```
 若哈希不匹配或文件缺失，验证器将以退出码 1 阻断流程。
+
+## 四、真正的可信 QA 工作流（Audit round five）
+
+签署 PASS 所依赖的 `fpf-independent-qa.yml` 必须从受保护 main 检出验收脚本和已由独立审查人审核的 `.fpf/qa-plan.json`。每个必需 EVID 都要在该计划中配置真实命令 argv（EVID-31/32 由采集器从真实文件清单计算），在独立检出的目标 SHA 下执行，记录原始输出、退出码及文件 SHA。缺失配置即拒绝执行。
+
+修复轮次的 EVID-26 RED 测试必须出现预先声明的非零退出码；全栈 EVID-22 必须是真实 PNG。只有 GitHub Actions 产物与 QA Reviewer 的平台身份、审核 SHA 和 Artifact ID 一致，并经 Coordinator 验证 Manifest，才可认定是可信来源。此机制仍不等于人工审查可省略。详见 `docs/AUDIT-ROUND5.md`。

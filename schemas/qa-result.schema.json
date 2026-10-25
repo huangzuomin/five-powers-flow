@@ -15,7 +15,8 @@
     "checks",
     "evidence_manifest_sha256",
     "findings",
-    "next_action"
+    "next_action",
+    "author"
   ],
   "properties": {
     "result_version": {
@@ -111,10 +112,25 @@
         "Library",
         "API-DB",
         "Full-Stack",
-        "Rework"
-      ],
-      "default": "Library",
-      "description": "Evidence profile defining required test evidence items under FPF-SPEC-EVIDENCE-32."
+        "Rework",
+        "PROFILE-LIBRARY",
+        "PROFILE-API-DB",
+        "PROFILE-FULLSTACK",
+        "PROFILE-REWORK"
+      ]
+    },
+    "author": {
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]+$"
+    },
+    "qa_run_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "qa_artifact_id": {
+      "type": "integer",
+      "minimum": 1
     }
   }
 }

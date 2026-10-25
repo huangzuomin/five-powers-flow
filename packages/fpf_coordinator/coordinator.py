@@ -32,12 +32,31 @@ import yaml
 HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 HEX_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
+# Mandatory evidence groups are aligned with EVIDENCE-SPEC §2.
+# Rework adds RED/Green proof to the Library baseline; API and Full-Stack
+# include environment, integration and browser evidence as appropriate.
+_LIB = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 29, 30, 31, 32}
+_API = _LIB | {11, 14, 15, 16, 17, 18, 19, 20}
+_FULL = _API | {21, 22, 23, 24}
+_REWORK = _LIB | {25, 26, 27, 28}
 REQUIRED_PROFILE_EVIDENCES: Dict[str, List[str]] = {
-    "Library": ["EVID-01", "EVID-04", "EVID-09"],
-    "API-DB": ["EVID-01", "EVID-02", "EVID-04", "EVID-05", "EVID-09"],
-    "Full-Stack": ["EVID-01", "EVID-02", "EVID-03", "EVID-04", "EVID-09"],
-    "Rework": ["EVID-01", "EVID-04", "EVID-09", "EVID-25"],
+    name: [f"EVID-{number:02d}" for number in sorted(numbers)]
+    for name, numbers in {
+        "Library": _LIB, "API-DB": _API, "Full-Stack": _FULL,
+        "Rework": _REWORK,
+    }.items()
 }
+PROFILE_ALIASES = {
+    "PROFILE-LIBRARY": "Library", "PROFILE-API-DB": "API-DB",
+    "PROFILE-FULLSTACK": "Full-Stack", "PROFILE-REWORK": "Rework",
+}
+
+def normalize_profile(value: str) -> str:
+    value = str(value or "").strip()
+    mapped = PROFILE_ALIASES.get(value, value)
+    if mapped not in REQUIRED_PROFILE_EVIDENCES:
+        raise ValueError(f"Unsupported evidence profile '{value}' (fail closed)")
+    return mapped
 
 
 def run_cmd(cmd: List[str], cwd: Optional[Path] = None, timeout: int = 15) -> Tuple[int, str, str]:
@@ -57,9 +76,10 @@ def run_cmd(cmd: List[str], cwd: Optional[Path] = None, timeout: int = 15) -> Tu
         return -1, "", str(exc)
 
 
-def verify_github_pr_merge(pr_identifier: str, repo_path: Optional[Path] = None) -> Tuple[bool, str, str]:
+def verify_github_pr_merge(pr_identifier: str, repo_path: Optional[Path] = None,
+                           expected_tested_sha: Optional[str] = None) -> Tuple[bool, str, str]:
     """Query GitHub API/CLI to verify that PR was legitimately merged on server."""
-    code, stdout, stderr = run_cmd(["gh", "pr", "view", str(pr_identifier), "--json", "state,mergedAt,mergeCommit"], cwd=repo_path)
+    code, stdout, stderr = run_cmd(["gh", "pr", "view", str(pr_identifier), "--json", "state,mergedAt,mergeCommit,headRefOid"], cwd=repo_path)
     if code != 0:
         return False, "", f"Failed to query GitHub CLI for PR '{pr_identifier}': {stderr}"
     try:
@@ -69,7 +89,12 @@ def verify_github_pr_merge(pr_identifier: str, repo_path: Optional[Path] = None)
             return False, "", f"GitHub reports PR '{pr_identifier}' state is '{state}', expected 'MERGED'."
         merge_commit = data.get("mergeCommit", {})
         merge_sha = merge_commit.get("oid") if isinstance(merge_commit, dict) else ""
-        return True, str(merge_sha or ""), f"Confirmed merged at {data.get('mergedAt')}"
+        head_sha = str(data.get("headRefOid") or "").lower()
+        if expected_tested_sha and head_sha != str(expected_tested_sha).lower():
+            return False, "", "GitHub PR head does not equal QA tested commit"
+        if not HEX_SHA_RE.fullmatch(str(merge_sha)):
+            return False, "", "GitHub mergeCommit.oid missing or invalid"
+        return True, str(merge_sha), f"Confirmed merged at {data.get('mergedAt')}"
     except Exception as exc:
         return False, "", f"Failed to parse GitHub CLI response: {exc}"
 
@@ -133,21 +158,33 @@ def verify_evidence_directory(
             except Exception as s_exc:
                 errors.append(f"manifest.json violates schemas/manifest.schema.json: {s_exc}")
 
-        target_profile = str(profile or "Library").strip()
-        if target_profile not in REQUIRED_PROFILE_EVIDENCES:
-            target_profile = "Library"
-
+        target_profile = normalize_profile(profile)
+        declared_profile = normalize_profile(manifest_data.get("profile", ""))
+        if target_profile != declared_profile:
+            errors.append(f"Evidence profile mismatch: card={target_profile} manifest={declared_profile}")
         required_evids = REQUIRED_PROFILE_EVIDENCES[target_profile]
-        declared_evid_ids = set()
+        verified_evid_ids = set()
+        seen_ids = set()
+        evidence_root = evidence_dir.resolve()
 
         for item in items:
-            evid_id = str(item.get("id", "UNKNOWN")).strip()
-            declared_evid_ids.add(evid_id)
+            evid_id = str(item.get("id", "UNKNOWN")).strip().split("-", 2)
+            evid_id = "-".join(evid_id[:2])  # EVID-XX suffix names are aliases
+            if evid_id in seen_ids:
+                errors.append(f"{evid_id}: duplicate evidence ID")
+                continue
+            seen_ids.add(evid_id)
             status = str(item.get("status", "PASS")).upper()
             if status == "NOT_APPLICABLE":
                 reason = str(item.get("reason", "")).strip()
                 if len(reason) < 10:
                     errors.append(f"{evid_id}: NOT_APPLICABLE status requires architectural justification in 'reason' (min 10 chars)")
+                if evid_id in required_evids:
+                    errors.append(f"{evid_id}: Mandatory evidence cannot be NOT_APPLICABLE")
+                # Optional N/A entries never count towards required coverage.
+                continue
+            if status != "PASS":
+                errors.append(f"{evid_id}: unsupported evidence status '{status}'")
                 continue
 
             rel_path = str(item.get("path", "")).strip()
@@ -156,7 +193,7 @@ def verify_evidence_directory(
                 errors.append(f"{evid_id}: Manifest item missing 'path' or 'sha256'")
                 continue
             item_file = (evidence_dir / rel_path).resolve()
-            if not str(item_file).startswith(str(evidence_dir.resolve())):
+            if not item_file.is_relative_to(evidence_root):
                 errors.append(f"{evid_id}: Path traversal forbidden: '{rel_path}' escapes evidence directory")
                 continue
             if not item_file.is_file():
@@ -167,8 +204,10 @@ def verify_evidence_directory(
                 errors.append(
                     f"{evid_id}: Evidence SHA-256 mismatch for '{rel_path}'. Declared: {expected_sha}, Actual: {item_hash}"
                 )
+            else:
+                verified_evid_ids.add(evid_id)
 
-        missing_profile_evids = set(required_evids) - declared_evid_ids
+        missing_profile_evids = set(required_evids) - verified_evid_ids
         if missing_profile_evids:
             errors.append(
                 f"Evidence manifest for profile '{target_profile}' omitted mandatory evidence items: {sorted(missing_profile_evids)}"
@@ -193,7 +232,7 @@ def extract_yaml_block(text: str, marker: str = "DEV_HANDOFF") -> str:
 def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None) -> List[str]:
     """Cryptographically and structurally validate DEV_HANDOFF card."""
     errors = []
-    required_scalars = ["handoff_version", "kind", "task_id", "baseline_sha", "tested_code_sha", "pr_url", "state"]
+    required_scalars = ["handoff_version", "kind", "task_id", "baseline_sha", "tested_code_sha", "pr_url", "state", "author"]
     for field in required_scalars:
         val = data.get(field)
         if val is None or val == "":
@@ -235,17 +274,13 @@ def validate_dev_handoff(data: Dict[str, Any], repo_path: Optional[Path] = None)
     if not isinstance(changed_files, list) or not changed_files:
         errors.append("changed_files must be a non-empty list of file paths")
 
-    # P2-1 Fix: not_run 必须为列表；若为空，则必须提供详细的 not_run_exemption_justification
     not_run = data.get("not_run")
-    not_run_exemption = str(data.get("not_run_exemption_justification", "")).strip()
-    if not isinstance(not_run, list):
-        errors.append("not_run must be explicitly declared as a list of untested areas/boundaries")
-    elif len(not_run) == 0:
-        if len(not_run_exemption) < 15:
-            errors.append(
-                "not_run is empty. Under FPF anti-deception rules, if claiming 100% boundary testing with zero untested areas, "
-                "you must provide an explicit 'not_run_exemption_justification' (minimum 15 characters) citing test matrix / scope evidence."
-            )
+    if not isinstance(not_run, list) or not not_run or any(
+        not isinstance(item, str) or not item.strip() for item in not_run
+    ):
+        errors.append("not_run is empty or invalid; explicit untested boundaries are mandatory")
+    if "not_run_exemption_justification" in data:
+        errors.append("not_run_exemption_justification is prohibited; self-attested exemptions are not evidence")
 
     dev_checks = data.get("dev_checks")
     if not isinstance(dev_checks, list) or not dev_checks:
@@ -270,6 +305,7 @@ def validate_qa_result(
         "runner_sha",
         "qa_contract_sha",
         "environment",
+        "author",
         "verdict",
         "checks",
         "evidence_manifest_sha256",
@@ -300,18 +336,40 @@ def validate_qa_result(
     elif repo_path and not git_is_commit_object(qa_contract_sha, repo_path):
         errors.append(f"qa_contract_sha '{qa_contract_sha}' does not exist as a commit in git repository!")
 
+    # Immutable QA toolchain and contract must not be supplied by the tested code
+    # commit itself. A separate pinned QA baseline is necessary (not sufficient)
+    # to establish independence.
+    if str(qa_data.get("verdict")) == "PASS":
+        if runner_sha == tested_sha or qa_contract_sha == tested_sha:
+            errors.append("QA runner_sha and qa_contract_sha must differ from tested_sha")
+        if dev_data and repo_path:
+            base = str(dev_data.get("baseline_sha") or "")
+            if HEX_SHA_RE.fullmatch(base) and git_is_commit_object(base, repo_path):
+                for label, checked in (("runner_sha", runner_sha),
+                                       ("qa_contract_sha", qa_contract_sha)):
+                    if git_is_commit_object(checked, repo_path):
+                        code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor",
+                                              checked, base], cwd=repo_path)
+                        if code != 0:
+                            errors.append(label + " is not pinned to a pre-DEV base/ancestor")
     if dev_data:
+        if str(qa_data.get("task_id")) != str(dev_data.get("task_id")):
+            errors.append("QA_RESULT task_id differs from DEV_HANDOFF task_id")
         dev_tested_sha = str(dev_data.get("tested_code_sha", "")).strip()
         if tested_sha != dev_tested_sha:
             errors.append(f"CRITICAL DISCREPANCY: QA tested_sha ('{tested_sha}') != DEV tested_code_sha ('{dev_tested_sha}')!")
 
-        # Separation of Powers: DEV author cannot be QA author
-        dev_author = str(dev_data.get("author") or dev_data.get("signer") or dev_data.get("dev_author") or "").strip().lower()
-        qa_author = str(qa_data.get("author") or qa_data.get("signer") or qa_data.get("qa_author") or "").strip().lower()
-        if dev_author and qa_author and dev_author == qa_author:
+        import unicodedata
+        dev_author = unicodedata.normalize("NFKC", str(dev_data.get("author", ""))).strip().casefold()
+        qa_author = unicodedata.normalize("NFKC", str(qa_data.get("author", ""))).strip().casefold()
+        if not dev_author or not qa_author:
+            errors.append("Missing required DEV/QA author; self-attested identity is not authenticated")
+        elif dev_author == qa_author:
             errors.append(
-                f"CRITICAL SEPARATION OF POWERS VIOLATION: DEV author ('{dev_author}') cannot sign as QA auditor! Independent identity required."
+                "CRITICAL SEPARATION OF POWERS VIOLATION: DEV author cannot sign as QA auditor"
             )
+        # Strings alone never establish actual independent identity: GitHub checks
+        # must validate authenticated review principals before allowing merge.
     else:
         errors.append("CRITICAL: QA_RESULT cannot be validated in isolation without matching DEV_HANDOFF!")
 
@@ -360,6 +418,7 @@ def compute_lifecycle_state(
     qa_errors: List[str],
     pr_merged: bool = False,
     repo_path: Optional[Path] = None,
+    verified_merge_sha: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Compute (not blindly trust) the authoritative lifecycle state."""
     # P0-04 Fix: 任何错误优先 Fail-Closed，绝不被任何外部标记跳过
@@ -374,14 +433,27 @@ def compute_lifecycle_state(
         if not qa_data or qa_data.get("verdict") != "PASS":
             return "QA_REJECTED", "Cannot mark MERGED_AND_CLOSED without an authenticated, passing QA_RESULT."
         tested_sha = str(qa_data.get("tested_sha", "")).strip()
-        if repo_path and tested_sha:
-            base_ref = "origin/main"
-            if run_cmd(["git", "rev-parse", "--verify", base_ref], cwd=repo_path)[0] != 0:
-                base_ref = "main"
-            anc_code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor", tested_sha, base_ref], cwd=repo_path)
-            if anc_code != 0:
-                return "MERGE_UNVERIFIED", f"PR merge asserted, but tested_sha '{tested_sha}' is NOT an ancestor of branch '{base_ref}'!"
-        return "MERGED_AND_CLOSED", "PR is verified merged into main branch with cryptographic ancestry."
+        if not repo_path:
+            return "MERGE_UNVERIFIED", "Cannot verify merge ancestry without --check-git."
+        base_ref = "origin/main"
+        if run_cmd(["git", "rev-parse", "--verify", base_ref], cwd=repo_path)[0] != 0:
+            base_ref = "main"
+        # Squash commits deliberately differ from the original tested head.
+        # Accept this case ONLY when GitHub authenticated the real merged PR,
+        # confirmed its head equals QA tested_sha, and returned mergeCommit.oid.
+        candidate = verified_merge_sha or tested_sha
+        if not candidate or not git_is_commit_object(candidate, repo_path):
+            return "MERGE_UNVERIFIED", "Merged commit reference is missing or invalid"
+        anc_code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor", candidate,
+                                  base_ref], cwd=repo_path)
+        if anc_code != 0:
+            return "MERGE_UNVERIFIED", (
+                "PR merge asserted but code commit " + candidate +
+                " is not an ancestor of " + base_ref
+            )
+        if verified_merge_sha:
+            return "MERGED_AND_CLOSED", "GitHub PR identity/head and squash/merge commit ancestry verified."
+        return "MERGED_AND_CLOSED", "Tested code SHA ancestry verified (non-squash merge)."
 
     if qa_data:
         verdict = qa_data.get("verdict")
@@ -447,14 +519,8 @@ def main() -> int:
 
     print("=== [FPF Trusted Evaluator Engine v1.2.1] ===\n")
 
-    if args.verify_pr_merge:
-        is_merged, merge_sha, msg = verify_github_pr_merge(args.verify_pr_merge, repo_path=repo_path)
-        if not is_merged:
-            print(f"[FAIL] GitHub PR Merge Verification Failed: {msg}")
-            qa_errors.append(f"PR merge verification failed: {msg}")
-        else:
-            print(f"[PASS] GitHub PR Merge Verified: {msg} (Commit: {merge_sha})")
-            args.pr_merged = True
+    verified_merge_sha = None
+    merge_errors = []
 
     dev_data = load_card_input(args.dev_card, args.dev_text, "DEV_HANDOFF")
     if dev_data:
@@ -482,18 +548,31 @@ def main() -> int:
         else:
             print("[PASS] QA_RESULT is cryptographically and structurally valid.")
 
+    if args.verify_pr_merge:
+        expected = str((qa_data or {}).get("tested_sha") or "") or None
+        is_merged, merge_sha, msg = verify_github_pr_merge(
+            args.verify_pr_merge, repo_path=repo_path, expected_tested_sha=expected)
+        if not is_merged:
+            merge_errors.append("PR merge verification failed: " + msg)
+            print("[FAIL] GitHub PR Merge Verification Failed: " + msg)
+        else:
+            verified_merge_sha = merge_sha
+            args.pr_merged = True
+            print("[PASS] GitHub PR Merge Verified: " + msg + " (Commit " + merge_sha + ")")
+
     state, reason = compute_lifecycle_state(
         dev_data,
         qa_data,
         dev_errors,
-        qa_errors,
+        qa_errors + merge_errors,
         pr_merged=args.pr_merged,
         repo_path=repo_path,
+        verified_merge_sha=verified_merge_sha,
     )
     print(f"\n[Computed Lifecycle State] => {state}")
     print(f"[Reason]                   => {reason}\n")
 
-    if dev_errors or qa_errors:
+    if dev_errors or qa_errors or merge_errors:
         print("[FAIL] Lifecycle evaluation blocked on integrity errors.")
         return 1
 
