@@ -1,0 +1,61 @@
+name: FPF Independent QA (reviewer-dispatched)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tested_sha:
+        description: Exact target PR HEAD SHA
+        required: true
+        type: string
+      task_id:
+        description: FPF task ID
+        required: true
+        type: string
+      profile:
+        description: Evidence profile
+        type: choice
+        options: [Library, API-DB, Full-Stack, Rework]
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout trusted QA plan and runner from main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      - name: Checkout fixed candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Collect actual QA outputs from trusted plan
+        env:
+          PYTHONPATH: ${{ github.workspace }}/trusted
+          FPF_SHA: ${{ inputs.tested_sha }}
+          FPF_TASK: ${{ inputs.task_id }}
+          FPF_PROFILE: ${{ inputs.profile }}
+        run: |
+          python -m packages.fpf_policy.qa_collector \
+            --plan trusted/.fpf/qa-plan.json \
+            --repo candidate --out qa-artifact \
+            --task-id "$FPF_TASK" --tested-sha "$FPF_SHA" \
+            --profile "$FPF_PROFILE"
+      - name: Upload actual evidence files
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpf-qa-${{ inputs.tested_sha }}
+          path: qa-artifact/*
+          if-no-files-found: error
+          retention-days: 30

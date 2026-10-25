@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed (Audit round five — pending independent QA)
 - Reject placeholder evidence, self-attested test exemptions, unsigned authorship strings as proof, and unknown evidence profiles.
 - Added a shared protected-path policy and negative audit regression tests.
-- Introduced safer project onboarding and required-review design tasks; platform protection remains separately administered.
+- Added fail-closed project onboarding, GitHub platform reviewer checks, and protected-main Actions artifact provenance checks; native reviewer count remains separately administered.
+- Added a reference independently dispatched QA runner; projects must configure authentic reviewed test commands before any trusted PASS.
 
 
 ## [1.2.1] - 2026-10-25

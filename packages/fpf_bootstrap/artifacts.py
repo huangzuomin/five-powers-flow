@@ -130,6 +130,8 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
         "packages/fpf_policy/__init__.py",
         "packages/fpf_policy/protected.py",
         "packages/fpf_policy/pr_gate.py",
+        "packages/fpf_policy/qa_artifact.py",
+        "packages/fpf_policy/qa_collector.py",
         "packages/fpf_coordinator/__init__.py",
         "packages/fpf_coordinator/coordinator.py",
         "packages/fpf_gates/__init__.py",
@@ -149,6 +151,9 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
         "from packages.fpf_gates.hook_guard_dev import main\n"
         "raise SystemExit(main())\n")
     # GitHub Actions checks authenticated reviews, not author-filled text.
+    result[".github/workflows/fpf-independent-qa.yml"] = (
+        source / ".github/workflows/fpf-independent-qa.yml"
+    ).read_text(encoding="utf-8")
     result[".github/workflows/validate-handoff-cards.yml"] = (
         "name: FPF Trusted PR Review\n"
         "on:\n"
@@ -159,6 +164,7 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
         "permissions:\n"
         "  contents: read\n"
         "  pull-requests: read\n"
+        "  actions: read\n"
         "jobs:\n"
         "  validate-card:\n"
         "    runs-on: ubuntu-latest\n"
@@ -207,6 +213,13 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
         "# Mandatory setup before allowing merges\n\n"
         "Configure CODEOWNERS with a real independent GitHub account or GitHub App, "
         "set required_approving_review_count >= 1, require the validate and "
-        "validate-card checks, and run FPF Doctor with --require-ready. "
+        "validate-card checks, and run FPF Doctor (full readiness check). "
         "A single-author repository cannot claim independent QA approval.\n")
+    result[".fpf/QA-PLAN-SETUP.md"] = (
+        "# Independent QA plan\n\n"
+        "A real separate reviewer must configure .fpf/qa-plan.json on protected main "
+        "with one physical command argv array for every mandatory EVID-XX except "
+        "the collector-produced EVID-31/EVID-32. Without this explicitly reviewed "
+        "plan, workflow_dispatch fails. See FPF docs/AUDIT-ROUND5.md.\n"
+    )
     return result

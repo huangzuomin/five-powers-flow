@@ -12,8 +12,10 @@ PROJECT_READY (future gate).
 
 Today the module implements planning, local worktree provisioning, generated
 bootstrap documentation and a diagnostic doctor; it never automatically marks
-PROJECT_READY. A separate GitHub BOOTSTRAP_PR gate, API session provisioning,
-human baseline approval check and PR publication remain follow-up work.
+PROJECT_READY. A narrowly scoped BOOTSTRAP_PR validation route now exists, but a real second
+GitHub reviewer and native protected-branch approval remain prerequisites.
+API session provisioning, automatic bootstrap PR publication and a trusted
+human approval-to-PROJECT_READY reconciliation remain follow-up work.
 
 ## Install
 
@@ -59,6 +61,9 @@ Files generated in the bootstrap worktree:
 - docs/coordination/HANDOFF-PROTOCOL.md
 - .fpf/project.yaml, .fpf/agents.yaml, .fpf/discovery.json
 - .fpf/prompts/ for orchestrator, dev_lead, qa_lead and scribe.
+- FPF vendor validator and policy, JSON schemas, .claude hook settings,
+  .github PR and schema validation workflows, independent QA workflow,
+  a commented CODEOWNERS placeholder and required reviewer setup instructions.
 
 All roles have status CONFIGURED_NOT_VERIFIED. The API mode produces agent
 definitions suitable for a later Agents SDK provisioning step; it does **not**
@@ -70,20 +75,22 @@ for manually creating four ChatGPT product conversations.
 
     fpf doctor --repo "C:/Projects/new-app" --workspace-root "C:/FPF/workspaces" --project-id MYAPP01
 
-Doctor checks physical worktree provenance, branch/head SHA and artifacts.
-A partially configured or unapproved project reports BOOTSTRAP_PARTIAL with
-exit code 2; it does not pretend the project is ready. At this stage, user
-approval, API provisioning, authentic server-side independent QA requirements,
-and the initial BOOTSTRAP_PR gate are explicitly outstanding.
+Run `fpf doctor ... --check` for **physical workspace integrity only**. This
+can succeed without saying the project is approved. Without --check, doctor
+requires reviewed map and live Agent sessions and correctly blocks.
+An interrupted init records PENDING intent; use `fpf init ... --apply` to
+resume or `fpf init ... --rollback` to request conservative rollback. Rollback
+refuses to delete modified or foreign files. Manual approval, agent provisioning,
+and verified native GitHub branch settings remain outstanding.
 
 ## Model of authority
 
 Bootstrap can propose the **first** map without an existing code PR, but
 it cannot perform regular post-merge MAP_UPDATE. The normal FPF dual-PR
-policy remains unchanged. In particular, the current CI
-validate-handoff-cards workflow rejects mixed governance and config
-changes: until the dedicated BOOTSTRAP_PR validator is implemented, the
-generated files must NOT be treated as an automatically mergeable PR.
+policy remains unchanged. In particular, a dedicated `kind: BOOTSTRAP` PR card is now classified through a
+narrowly allowed list of governance files, but only the independently
+authenticated reviewer may approve. Normal mixed CODE+MAP PRs remain blocked.
+Bootstrap does not itself publish, sign or merge this PR.
 
 No prior QA_PASS, DEPLOYED, code-complete claim, or real ChatGPT thread ID
 is inferred from documentation. Existing target governance files trigger a

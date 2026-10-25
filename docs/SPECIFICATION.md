@@ -129,7 +129,7 @@ state: "DEV_READY_FOR_QA"                    # 枚举: DEV_READY_FOR_QA | DEV_BL
 ```
 
 ### 4.2 QA 裁决卡 (`QA_RESULT`)
-由 QA 总指挥在独立工位完成回归后签署在 Issue 或 PR 评审中。契约由 `schemas/qa-result.schema.json` 强校验：
+由独立 QA 在真实执行后，于 GitHub PR 的 APPROVED Review 正文签署。普通 Issue 评论不触发受保护的 QA 验证。契约由 `schemas/qa-result.schema.json` 强校验：
 ```yaml
 result_version: 1
 kind: "QA_RESULT"

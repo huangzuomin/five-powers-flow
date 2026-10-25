@@ -131,7 +131,7 @@ python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-
 ### 3. 第一个 PR 走通标准闭环 (First Walkthrough via Protocol)
 1. **DEV 发起分支与开发**：在独立 worktree 或特性分支开发，本地运行 `python packages/fpf_gates/pre_handoff.py --base main`；
 2. **提交代码 PR**：在 PR 描述中填入合规 `DEV_HANDOFF` 卡片；CI 自动触发并验证卡片与 SHA 绑定；
-3. **QA 独立工位验收**：检出 PR 分支，执行对抗验证，在独立 QA 工位生成实际证据包（不得以仓库示例替代），在评论中签署 `QA_RESULT`；
+3. **QA 独立工位验收**：检出 PR 分支，执行对抗验证，在独立 QA 工位生成实际证据包（不得以仓库示例替代），在独立 GitHub PR Review 中签署 `QA_RESULT`（并引用可信 QA workflow run 与 artifact）；
 4. **人类终审与 Squash Merge**：人类负责人核查红绿简报并在 GitHub 点击 Merge，主干生成正式提交 SHA；
 5. **地图总控发起地图 PR**：根据代码 commit SHA 提交包含 `MAP_UPDATE` 的纯文档 PR，经 CI 验证祖先关系后由人类合入主干。
 

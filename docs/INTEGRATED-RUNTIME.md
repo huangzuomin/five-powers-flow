@@ -86,11 +86,17 @@ a process crash. SQLite stores task state and an append-only event record.
 2. GitHub write tokens are removed from Codex/test subprocess environment, but
    this is not a sufficient sandbox for untrusted PR code. Use separate OS users
    or hosted runners to enforce independent principal and filesystem boundaries.
-3. The existing GitHub CI can still accept a CODE PR with no mandatory verified
-   QA check. The generated PR therefore stays a draft awaiting owner review.
-4. FPF's current QA_RESULT schema and profile evidence are **not** claimed satisfied
-   by this lightweight local QA manifest. A future CI workflow must generate and
-   validate its own evidence against a remote, immutable PR-head commit.
+3. The new GitHub `validate-card` context **fails closed** unless there is a
+   distinct platform-verified QA approval tied to the current PR SHA plus a
+   verified, reviewer-dispatched GitHub Actions artifact. Local PASS remains
+   provisional, not a merge authorization.
+4. The optional `--qa-evidence-dir DIR --qa-profile Library` path consumes
+   authentic independently generated `DIR/TASK/SHA/EVID-XX.ext` files and
+   produces a full coordinator-compatible evidence manifest. Missing mandatory
+   items are rejected. This is *format interoperability*, not reviewer identity
+   proof. For server admission, the reviewer must run the protected-main
+   `fpf-independent-qa.yml` workflow and reference the resulting artifact
+   IDs and digest in an approved QA_RESULT review.
 5. This branch has hermetic tests, not verified live Codex/API/GitHub credentials;
    Win11 direct integration remains a separate acceptance requirement.
 6. Attempts and max-steps are bounded. External models can still consume tokens;
@@ -110,3 +116,24 @@ Required QA GitHub status check scoped to exact head SHA, credential-separated Q
 external process IDs/restart reconciliation, budget enforcement, PR confirmation,
 durable artifact store and a negative smoke test on the user's actual Windows
 Codex version. These have not been claimed complete.
+
+## Audit-round-five QA pipeline
+
+The independent reviewer must first review and merge a real QA plan at
+`.fpf/qa-plan.json` on protected main. It must contain `commands`, an argv
+array for each mandatory EVID-XX except `EVID-31` and `EVID-32`, which the
+trusted collector computes from actual files. Missing plans, failed commands,
+wrong SHA, missing outputs or altered hashes block. A no-op `echo PASS`
+command is **not** an adequate quality plan, even if it exits 0. Trusted
+reviewers must inspect that each plan command establishes its EVID semantics.
+
+Then dispatch the protected `FPF Independent QA` GitHub workflow with exact
+PR head SHA, task ID and profile. Wait for its *actual* successful run and
+artifact upload. In a distinct GitHub **APPROVED PR review**, place a genuine
+QA_RESULT with matching `qa_run_id`, `qa_artifact_id`, tested SHA, base-pinned
+runner/contract SHAs, profile, actual check exits and manifest SHA256 printed
+by the workflow. The required `validate-card` check verifies actor, PR review,
+CI run, SHA, artifact bytes, manifest, evidence files and coordinator verdict.
+
+There is no preconfigured project-specific QA plan or second approver in this
+repo. Consequently existing Draft PR #46 is expected to remain blocked.

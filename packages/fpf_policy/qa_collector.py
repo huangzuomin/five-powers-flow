@@ -1,0 +1,89 @@
+"""Trusted QA collector: actual command stdout/stderr and process exit codes only.
+
+Only executes an independently reviewed QA plan from the *main* checkout.
+Missing or failed mandatory checks reject the run. No mocked PASS evidence.
+"""
+from __future__ import annotations
+import argparse
+from datetime import datetime,timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from packages.fpf_coordinator.coordinator import REQUIRED_PROFILE_EVIDENCES,normalize_profile
+
+def collect(plan_path:Path, code:Path, output:Path, task_id:str, tested_sha:str, profile:str):
+    profile=normalize_profile(profile)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",task_id) or not re.fullmatch("[a-f0-9]{40}",tested_sha):
+        raise ValueError("Invalid task_id or tested SHA")
+    plan=json.loads(plan_path.read_text(encoding="utf-8"))
+    commands=plan.get("commands",{})
+    mandatory=set(REQUIRED_PROFILE_EVIDENCES[profile])-{"EVID-31","EVID-32"}
+    if not isinstance(commands,dict) or not mandatory.issubset(commands):
+        raise ValueError("Trusted QA plan lacks required evidence commands: "+
+                         str(sorted(mandatory-set(commands))))
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("Refusing to overwrite previous QA artifacts")
+    head=subprocess.run(["git","rev-parse","HEAD"],cwd=code,check=True,
+                        capture_output=True,text=True,timeout=30).stdout.strip()
+    if head != tested_sha:
+        raise ValueError("Candidate Git HEAD differs from supplied SHA")
+    output.mkdir(parents=True,exist_ok=True)
+    entries=[]
+    for evid_id in sorted(mandatory):
+        argv=commands[evid_id]
+        if not isinstance(argv,list) or not argv or not all(isinstance(s,str) and s and "\x00" not in s for s in argv):
+            raise ValueError("Invalid QA argv for "+evid_id)
+        env={k:v for k,v in os.environ.items()
+             if k.upper() in {"PATH","HOME","USER","LANG","LC_ALL","SYSTEMROOT",
+                              "TEMP","TMP","TMPDIR","VIRTUAL_ENV"}}
+        # Never inherit PYTHONPATH from the trusted runner: candidate tests must
+        # resolve modules from the tested checkout, not the main checkout.
+        env.update({"PYTHONPATH":str(code.resolve()),
+                    "FPF_TESTED_SHA":tested_sha,"FPF_TASK_ID":task_id})
+        start=datetime.now(timezone.utc).isoformat()
+        result=subprocess.run(argv,cwd=code,env=env,capture_output=True,
+                              check=False,timeout=min(1200,int(plan.get("timeout_seconds",600))))
+        raw=(json.dumps({"task_id":task_id,"tested_sha":tested_sha,"evid_id":evid_id,
+                         "command":argv,"start_utc":start,
+                         "exit_code":result.returncode},sort_keys=True)+"\n").encode()+(
+                             b"STDOUT\n"+result.stdout+b"\nSTDERR\n"+result.stderr)
+        evidence=output/(evid_id+".log")
+        evidence.write_bytes(raw)
+        if result.returncode != 0:
+            raise ValueError(evid_id+" returned nonzero exit "+str(result.returncode))
+        entries.append({"id":evid_id,"path":evidence.name,
+                        "sha256":hashlib.sha256(raw).hexdigest(),"status":"PASS"})
+    index=output/"EVID-31.json"
+    index.write_text(json.dumps(entries,indent=2)+"\n",encoding="utf-8")
+    anchor=output/"EVID-32.sha256"
+    anchor.write_text(hashlib.sha256(index.read_bytes()).hexdigest()+"  EVID-31.json\n",encoding="utf-8")
+    for eid,file in (("EVID-31",index),("EVID-32",anchor)):
+        entries.append({"id":eid,"path":file.name,
+                        "sha256":hashlib.sha256(file.read_bytes()).hexdigest(),"status":"PASS"})
+    manifest={"manifest_version":1,"task_id":task_id,"tested_sha":tested_sha,
+              "profile":profile,"items":entries}
+    target=output/"manifest.json"
+    target.write_text(json.dumps(manifest,indent=2)+"\n",encoding="utf-8")
+    return hashlib.sha256(target.read_bytes()).hexdigest()
+
+def main():
+    parser=argparse.ArgumentParser()
+    for arg in ("plan","repo","out"):
+        parser.add_argument("--"+arg,type=Path,required=True)
+    for arg in ("task-id","tested-sha","profile"):
+        parser.add_argument("--"+arg,required=True)
+    a=parser.parse_args()
+    try:
+        digest=collect(a.plan,a.repo,a.out,a.task_id,a.tested_sha,a.profile)
+        print("Physical manifest SHA256: "+digest)
+        return 0
+    except (OSError,ValueError,subprocess.SubprocessError) as exc:
+        print("QA collector blocked: "+str(exc),file=sys.stderr)
+        return 2
+
+if __name__=="__main__":
+    sys.exit(main())
