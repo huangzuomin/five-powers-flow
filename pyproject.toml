@@ -22,12 +22,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-agents = [
-    "openai-agents>=0.6",
-]
-dev = [
-    "pytest>=7.0",
-]
+agents = ["openai-agents>=0.6"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+fpf = "packages.fpf_bootstrap.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

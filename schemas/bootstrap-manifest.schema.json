@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FPF initial project configuration",
+  "type": "object",
+  "required": [
+    "fpf_project_version",
+    "project_id",
+    "title",
+    "baseline_sha",
+    "project_map",
+    "bootstrap_state",
+    "agent_mode",
+    "slice_authorized",
+    "human_approval_required"
+  ],
+  "properties": {
+    "fpf_project_version": {
+      "const": 1
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baseline_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "project_map": {
+      "const": "docs/coordination/PROJECT-MAP.md"
+    },
+    "bootstrap_state": {
+      "enum": [
+        "BOOTSTRAP_REVIEW",
+        "PROJECT_READY"
+      ]
+    },
+    "agent_mode": {
+      "enum": [
+        "api",
+        "manual"
+      ]
+    },
+    "slice_authorized": {
+      "const": false
+    },
+    "human_approval_required": {
+      "const": true
+    }
+  },
+  "additionalProperties": false
+}
