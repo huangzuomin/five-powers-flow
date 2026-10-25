@@ -20,6 +20,7 @@ def main() -> int:
     p.add_argument("--qa-worktree", required=True, type=Path)
     p.add_argument("--state-db", type=Path, default=Path(".fpf-runtime/slices.sqlite3"))
     p.add_argument("--model", required=True, help="Responses API model for DEV and QA role sessions")
+    p.add_argument("--base-url", default=None, help="OpenAI Responses API base URL (default: OPENAI_BASE_URL or https://api.openai.com/v1)")
     p.add_argument("--dev-check", required=True, help="Quoted argv, no shell")
     p.add_argument("--qa-check", required=True, help="Quoted argv, no shell")
     p.add_argument("--max-attempts", type=int, default=3)
@@ -42,9 +43,10 @@ def main() -> int:
         elif state["goal"] != args.goal:
             raise ValueError("Cannot change an existing slice goal")
         runtime = SliceRuntime(
-            ledger, OpenAIResponsesRoles(args.model), CodexExec(),
+            ledger, OpenAIResponsesRoles(args.model, base_url=args.base_url), CodexExec(),
             dev, args.qa_worktree,
-            shlex.split(args.dev_check), shlex.split(args.qa_check),
+            shlex.split(args.dev_check, posix=sys.platform != "win32"),
+            shlex.split(args.qa_check, posix=sys.platform != "win32"),
             timeout=args.timeout)
         state = runtime.run(args.task_id, args.max_steps)
         print(json.dumps({"state": state["phase"], "attempts": state["attempt"],

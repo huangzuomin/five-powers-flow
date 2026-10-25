@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from .adapters import commit_dev_changes, ensure_qa_worktree, git, run_command
@@ -69,7 +70,7 @@ class SliceRuntime:
                     return self.ledger.save(state, "BLOCKED", "DEV workspace is dirty")
                 state["attempt"] += 1
                 self.ledger.save(state, "DEV_RUNNING", "DEV attempt " + str(state["attempt"]))
-                prompt = ("Implement task: " + state["goal"] + "\nWork order: " +
+                prompt = ("You are working strictly inside this workspace. Do not search for missing tools; edit the requested files directly.\nImplement task: " + state["goal"] + "\nWork order: " +
                           state["dev_order"] + "\nFailure to repair: " + state["last_failure"] +
                           "\nDo not merge, deploy, push, or modify governance files. "
                           "Edit files but DO NOT commit: the orchestrator will create "
@@ -111,7 +112,12 @@ class SliceRuntime:
                     return self._failed(state, "QA Codex exited " + str(result.code) +
                                         ": " + result.output[-1200:])
                 try:
-                    judgment = json.loads(result.output.strip())
+                    raw_output = result.output.strip()
+                    if "```" in raw_output:
+                        m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_output)
+                        if m:
+                            raw_output = m.group(1).strip()
+                    judgment = json.loads(raw_output)
                     verdict = judgment["verdict"]
                     if verdict not in ("PASS", "FAIL", "BLOCKED") or not isinstance(judgment["findings"], list):
                         raise ValueError("Unexpected QA fields")
