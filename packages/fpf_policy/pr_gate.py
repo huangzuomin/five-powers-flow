@@ -103,6 +103,23 @@ def verified_reviewer(reviews: list[dict], pr_author: str, sha: str) -> tuple[st
     raise ValueError("No distinct GitHub-authenticated APPROVED QA_RESULT on current head SHA")
 
 
+def authenticated_approval(reviews: list[dict], pr_author: str,
+                           sha: str) -> str:
+    """For BOOTSTRAP/MAP/POLICY: current-SHA platform approval, not QA_PASS."""
+    latest = {}
+    for review in reviews:
+        actor = str((review.get("user") or {}).get("login") or "").casefold()
+        if actor:
+            latest[actor] = review
+    for actor, review in latest.items():
+        if actor != pr_author.casefold() and (
+            str(review.get("state") or "").upper() == "APPROVED"
+            and str(review.get("commit_id") or "").lower() == sha.lower()
+        ):
+            return actor
+    raise ValueError("Independent platform APPROVED review on current head is required")
+
+
 def gh_reviews(repo_slug: str, pr_num: int, token: str) -> list[dict]:
     if not token:
         raise ValueError("GitHub read token required")
@@ -147,8 +164,9 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
     kind = cards[0]
     card = yaml_card(body,kind)
     pr_type = classify(files,kind,baseline_files,branch)
-    reviewer, qa = verified_reviewer(reviews,author,sha)
+    reviewer = authenticated_approval(reviews, author, sha)
     if pr_type == "CODE_PR":
+        reviewer, qa = verified_reviewer(reviews, author, sha)
         if str(card.get("author") or "").casefold() != author.casefold():
             raise ValueError("DEV_HANDOFF.author must equal platform PR author")
         if str(card.get("tested_code_sha") or "").lower() != sha:
