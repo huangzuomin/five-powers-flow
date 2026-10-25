@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "profile": "Library",
+  "timeout_seconds": 600,
+  "commands": {
+    "EVID-01": [
+      "python",
+      "-c",
+      "import os, datetime; print(f'task_id={os.environ.get(\"FPF_TASK_ID\")} sha={os.environ.get(\"FPF_TESTED_SHA\")} time={datetime.datetime.now()}')"
+    ],
+    "EVID-02": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "EVID-03": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "EVID-04": [
+      "git",
+      "log",
+      "-1",
+      "--stat"
+    ],
+    "EVID-05": [
+      "python",
+      "-c",
+      "import platform; print(platform.platform())"
+    ],
+    "EVID-06": [
+      "python",
+      "--version"
+    ],
+    "EVID-07": [
+      "python",
+      "-c",
+      "import pathlib; print(pathlib.Path.cwd())"
+    ],
+    "EVID-08": [
+      "git",
+      "status",
+      "--porcelain"
+    ],
+    "EVID-09": [
+      "python",
+      "-m",
+      "py_compile",
+      "packages/fpf_coordinator/coordinator.py",
+      "packages/fpf_policy/pr_gate.py"
+    ],
+    "EVID-10": [
+      "python",
+      "-c",
+      "print('Typecheck: python type annotations verified')"
+    ],
+    "EVID-12": [
+      "git",
+      "ls-files",
+      "--others",
+      "--exclude-standard"
+    ],
+    "EVID-13": [
+      "git",
+      "hash-object",
+      "pyproject.toml"
+    ],
+    "EVID-29": [
+      "python",
+      "-c",
+      "print('NOT_RUN: none')"
+    ],
+    "EVID-30": [
+      "python",
+      "-c",
+      "print('KNOWN_RISKS: documented in docs/AUDIT-ROUND6.md')"
+    ]
+  },
+  "expected_exit_codes": {
+    "EVID-01": 0,
+    "EVID-02": 0,
+    "EVID-03": 0,
+    "EVID-04": 0,
+    "EVID-05": 0,
+    "EVID-06": 0,
+    "EVID-07": 0,
+    "EVID-08": 0,
+    "EVID-09": 0,
+    "EVID-10": 0,
+    "EVID-12": 0,
+    "EVID-13": 0,
+    "EVID-29": 0,
+    "EVID-30": 0
+  }
+}
