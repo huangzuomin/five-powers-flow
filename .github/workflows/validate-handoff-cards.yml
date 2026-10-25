@@ -25,6 +25,9 @@ jobs:
           python-version: "3.11"
       - name: Install validator dependencies
         run: python -m pip install jsonschema pyyaml
+      - name: Restore trusted policy gate from base
+        run: |
+          git checkout ${{ github.event.pull_request.base.sha }} -- packages/fpf_policy/
       - name: Fail-closed GitHub-authenticated review and PR routing
         env:
           GH_TOKEN: ${{ github.token }}
