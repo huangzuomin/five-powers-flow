@@ -30,10 +30,10 @@ MAP_FILES = frozenset({"project-map.md", "lessons.md",
 def _policy_scope(changed: set[str]) -> str:
     """Governing workflow changes require the GATE_PR route, never prose waiver."""
     prose = {"readme.md", "changelog.md", "contributing.md", "security.md"}
-    if any(not (p in prose or p.startswith(("docs/", "tests/"))
+    if any(not (p in prose or p.startswith(("docs/", "tests/", "templates/"))
                 or is_protected(p)) for p in changed):
         raise ValueError("POLICY_CHANGE contains unrelated application files")
-    if any(is_protected(p) or p.startswith("tests/") for p in changed):
+    if any(is_protected(p) or p.startswith(("tests/", "templates/")) for p in changed):
         return "GATE_PR"
     return "POLICY_PR"
 
