@@ -76,9 +76,10 @@ def run_cmd(cmd: List[str], cwd: Optional[Path] = None, timeout: int = 15) -> Tu
         return -1, "", str(exc)
 
 
-def verify_github_pr_merge(pr_identifier: str, repo_path: Optional[Path] = None) -> Tuple[bool, str, str]:
+def verify_github_pr_merge(pr_identifier: str, repo_path: Optional[Path] = None,
+                           expected_tested_sha: Optional[str] = None) -> Tuple[bool, str, str]:
     """Query GitHub API/CLI to verify that PR was legitimately merged on server."""
-    code, stdout, stderr = run_cmd(["gh", "pr", "view", str(pr_identifier), "--json", "state,mergedAt,mergeCommit"], cwd=repo_path)
+    code, stdout, stderr = run_cmd(["gh", "pr", "view", str(pr_identifier), "--json", "state,mergedAt,mergeCommit,headRefOid"], cwd=repo_path)
     if code != 0:
         return False, "", f"Failed to query GitHub CLI for PR '{pr_identifier}': {stderr}"
     try:
@@ -88,7 +89,12 @@ def verify_github_pr_merge(pr_identifier: str, repo_path: Optional[Path] = None)
             return False, "", f"GitHub reports PR '{pr_identifier}' state is '{state}', expected 'MERGED'."
         merge_commit = data.get("mergeCommit", {})
         merge_sha = merge_commit.get("oid") if isinstance(merge_commit, dict) else ""
-        return True, str(merge_sha or ""), f"Confirmed merged at {data.get('mergedAt')}"
+        head_sha = str(data.get("headRefOid") or "").lower()
+        if expected_tested_sha and head_sha != str(expected_tested_sha).lower():
+            return False, "", "GitHub PR head does not equal QA tested commit"
+        if not HEX_SHA_RE.fullmatch(str(merge_sha)):
+            return False, "", "GitHub mergeCommit.oid missing or invalid"
+        return True, str(merge_sha), f"Confirmed merged at {data.get('mergedAt')}"
     except Exception as exc:
         return False, "", f"Failed to parse GitHub CLI response: {exc}"
 
@@ -412,6 +418,7 @@ def compute_lifecycle_state(
     qa_errors: List[str],
     pr_merged: bool = False,
     repo_path: Optional[Path] = None,
+    verified_merge_sha: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Compute (not blindly trust) the authoritative lifecycle state."""
     # P0-04 Fix: 任何错误优先 Fail-Closed，绝不被任何外部标记跳过
@@ -428,14 +435,25 @@ def compute_lifecycle_state(
         tested_sha = str(qa_data.get("tested_sha", "")).strip()
         if not repo_path:
             return "MERGE_UNVERIFIED", "Cannot verify merge ancestry without --check-git."
-        if tested_sha:
-            base_ref = "origin/main"
-            if run_cmd(["git", "rev-parse", "--verify", base_ref], cwd=repo_path)[0] != 0:
-                base_ref = "main"
-            anc_code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor", tested_sha, base_ref], cwd=repo_path)
-            if anc_code != 0:
-                return "MERGE_UNVERIFIED", f"PR merge asserted, but tested_sha '{tested_sha}' is NOT an ancestor of branch '{base_ref}'!"
-        return "MERGED_AND_CLOSED", "PR is verified merged into main branch with cryptographic ancestry."
+        base_ref = "origin/main"
+        if run_cmd(["git", "rev-parse", "--verify", base_ref], cwd=repo_path)[0] != 0:
+            base_ref = "main"
+        # Squash commits deliberately differ from the original tested head.
+        # Accept this case ONLY when GitHub authenticated the real merged PR,
+        # confirmed its head equals QA tested_sha, and returned mergeCommit.oid.
+        candidate = verified_merge_sha or tested_sha
+        if not candidate or not git_is_commit_object(candidate, repo_path):
+            return "MERGE_UNVERIFIED", "Merged commit reference is missing or invalid"
+        anc_code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor", candidate,
+                                  base_ref], cwd=repo_path)
+        if anc_code != 0:
+            return "MERGE_UNVERIFIED", (
+                "PR merge asserted but code commit " + candidate +
+                " is not an ancestor of " + base_ref
+            )
+        if verified_merge_sha:
+            return "MERGED_AND_CLOSED", "GitHub PR identity/head and squash/merge commit ancestry verified."
+        return "MERGED_AND_CLOSED", "Tested code SHA ancestry verified (non-squash merge)."
 
     if qa_data:
         verdict = qa_data.get("verdict")
@@ -501,14 +519,8 @@ def main() -> int:
 
     print("=== [FPF Trusted Evaluator Engine v1.2.1] ===\n")
 
-    if args.verify_pr_merge:
-        is_merged, merge_sha, msg = verify_github_pr_merge(args.verify_pr_merge, repo_path=repo_path)
-        if not is_merged:
-            print(f"[FAIL] GitHub PR Merge Verification Failed: {msg}")
-            qa_errors.append(f"PR merge verification failed: {msg}")
-        else:
-            print(f"[PASS] GitHub PR Merge Verified: {msg} (Commit: {merge_sha})")
-            args.pr_merged = True
+    verified_merge_sha = None
+    merge_errors = []
 
     dev_data = load_card_input(args.dev_card, args.dev_text, "DEV_HANDOFF")
     if dev_data:
@@ -536,18 +548,31 @@ def main() -> int:
         else:
             print("[PASS] QA_RESULT is cryptographically and structurally valid.")
 
+    if args.verify_pr_merge:
+        expected = str((qa_data or {}).get("tested_sha") or "") or None
+        is_merged, merge_sha, msg = verify_github_pr_merge(
+            args.verify_pr_merge, repo_path=repo_path, expected_tested_sha=expected)
+        if not is_merged:
+            merge_errors.append("PR merge verification failed: " + msg)
+            print("[FAIL] GitHub PR Merge Verification Failed: " + msg)
+        else:
+            verified_merge_sha = merge_sha
+            args.pr_merged = True
+            print("[PASS] GitHub PR Merge Verified: " + msg + " (Commit " + merge_sha + ")")
+
     state, reason = compute_lifecycle_state(
         dev_data,
         qa_data,
         dev_errors,
-        qa_errors,
+        qa_errors + merge_errors,
         pr_merged=args.pr_merged,
         repo_path=repo_path,
+        verified_merge_sha=verified_merge_sha,
     )
     print(f"\n[Computed Lifecycle State] => {state}")
     print(f"[Reason]                   => {reason}\n")
 
-    if dev_errors or qa_errors:
+    if dev_errors or qa_errors or merge_errors:
         print("[FAIL] Lifecycle evaluation blocked on integrity errors.")
         return 1
 

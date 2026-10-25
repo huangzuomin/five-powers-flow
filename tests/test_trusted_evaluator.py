@@ -344,7 +344,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             repo_path=self.repo_path,
         )
         self.assertEqual(state, "MERGE_UNVERIFIED")
-        self.assertIn("is NOT an ancestor", reason)
+        self.assertIn("is not an ancestor", reason)
 
     def test_issue_21_not_applicable_item_requires_reason(self):
         """Issue #21: NOT_APPLICABLE status requires architectural justification in 'reason'."""

@@ -24,7 +24,7 @@ checks, physical artifacts and human approvals must be observed separately.
 | #42 P2 bootstrap doctor/rollback/mechanism | doctor --check, PENDING journal, safe rollback, vendor CI/hooks/schema templates | Agent session provisioning, automated BOOTSTRAP_PR publication, human-approved READY reconciliation missing |
 | #43 P2 inconsistent paths and traversal | Central protected-path module, all local DEV checks use it; fixed path containment, policy-change PR lane | Cross-platform adversarial shell coverage not exhaustive |
 | #44 P2 contradictory docs | Removed changelog duplicate; README module index; calibrated claims; corrected QA review location and profiles | Independent content audit |
-| #45 P2 merge assertion | No repo ancestry => MERGE_UNVERIFIED, never cryptographic success based on flag | True squash merge attribution needs authoritative GitHub merge-commit validation |
+| #45 P2 merge assertion | No repo ancestry => MERGE_UNVERIFIED, never cryptographic success based on flag | For true squash merges, `--verify-pr-merge` queries authenticated GitHub PR state, binds headRefOid to QA-tested SHA, and verifies mergeCommit ancestor in main (unit-tested) |
 
 ## Reviewer prerequisites
 
