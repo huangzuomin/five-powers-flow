@@ -143,6 +143,9 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
             raise RuntimeError("Missing FPF vendor resource: " + filename)
         if filename.startswith("schemas/"):
             result[filename] = original.read_text(encoding="utf-8")
+            # Coordinator executes from .fpf/vendor, where its relative
+            # schema lookup must resolve to this mirrored trusted schema.
+            result[".fpf/vendor/" + filename] = original.read_text(encoding="utf-8")
         else:
             result[".fpf/vendor/" + filename] = original.read_text(encoding="utf-8")
     result[".fpf/vendor/guard_entry.py"] = (

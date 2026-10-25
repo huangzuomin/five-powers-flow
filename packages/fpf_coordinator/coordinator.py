@@ -148,9 +148,11 @@ def verify_evidence_directory(
             errors.append("Evidence manifest.json 'items' list cannot be empty! Zero evidence items cannot substantiate QA.")
             return errors
 
-        # Validate manifest.json against schemas/manifest.schema.json if available
+        # Missing schema is a security failure, never a reason to skip validation.
         schema_path = Path(__file__).resolve().parent.parent.parent / "schemas" / "manifest.schema.json"
-        if schema_path.is_file():
+        if not schema_path.is_file():
+            errors.append(f"Manifest schema not found at {schema_path}; refusing to skip validation")
+        else:
             try:
                 import jsonschema
                 schema_doc = json.loads(schema_path.read_text(encoding="utf-8"))
