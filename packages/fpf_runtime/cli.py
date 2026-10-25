@@ -19,6 +19,7 @@ def main() -> int:
     p.add_argument("--qa-worktree", type=Path)
     p.add_argument("--state-db", type=Path, default=Path(".fpf-runtime/slices.sqlite3"))
     p.add_argument("--model", help="API model for role sessions")
+    p.add_argument("--base-url", default=None, help="OpenAI Responses API base URL (default: OPENAI_BASE_URL or https://api.openai.com/v1)")
     p.add_argument("--role-backend", choices=["agents", "responses"], default="agents")
     p.add_argument("--dev-check", help="Quoted argv (not shell)")
     p.add_argument("--qa-check", help="Quoted argv (not shell)")
@@ -54,7 +55,7 @@ def main() -> int:
             roles = AgentsSDKRoles(args.model, args.task_id,
                                    args.state_db.resolve().with_suffix(".sessions.sqlite3"))
         else:
-            roles = OpenAIResponsesRoles(args.model)
+            roles = OpenAIResponsesRoles(args.model, base_url=args.base_url)
 
         publisher = None
         if args.publish_pr:
@@ -62,7 +63,8 @@ def main() -> int:
             publisher = GhDraftPublisher(args.base_branch)
         runtime = SliceRuntime(
             ledger, roles, CodexExec(), dev, args.qa_worktree,
-            shlex.split(args.dev_check), shlex.split(args.qa_check),
+            shlex.split(args.dev_check, posix=sys.platform != "win32"),
+            shlex.split(args.qa_check, posix=sys.platform != "win32"),
             timeout=args.timeout, publisher=publisher,
             evidence_root=args.state_db.resolve().parent / "evidence")
         state = runtime.run(args.task_id, max_steps=args.max_steps)

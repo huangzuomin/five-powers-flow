@@ -6,6 +6,7 @@ The optional publisher can create a draft PR; it can never merge or deploy.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,7 @@ class SliceRuntime:
                 state["attempt"] += 1
                 self.ledger.save(state, "DEV_RUNNING", "DEV attempt " + str(state["attempt"]))
                 prompt = (
+                    "You are working strictly inside this workspace. Do not search for missing tools; edit the requested files directly.\n"
                     "Implement exactly one bounded feature slice: " + state["goal"] +
                     "\nPlan: " + state["dev_order"] +
                     "\nPrior failures: " + state["last_failure"] +
@@ -120,7 +122,12 @@ class SliceRuntime:
                     return self._failed(state, "QA runner exit=" + str(result.code) +
                                         ": " + result.output)
                 try:
-                    verdict = json.loads(result.output.strip())
+                    raw_output = result.output.strip()
+                    if "```" in raw_output:
+                        m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_output)
+                        if m:
+                            raw_output = m.group(1).strip()
+                    verdict = json.loads(raw_output)
                     if (not isinstance(verdict, dict)
                             or verdict.get("verdict") not in ("PASS", "FAIL", "BLOCKED")
                             or not isinstance(verdict.get("findings"), list)):

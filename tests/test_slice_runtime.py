@@ -131,6 +131,28 @@ class TestSliceRuntime(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runtime()
 
+    def test_qa_markdown_code_fence_is_parsed(self):
+        class MarkdownFenceCodex(FakeCodex):
+            def run(self, workspace, prompt, read_only=False):
+                if read_only:
+                    return StepResult(0, "```json\n{\"verdict\": \"PASS\", \"findings\": []}\n```")
+                return super().run(workspace, prompt, read_only=read_only)
+        self.codex = MarkdownFenceCodex()
+        r = self.runtime().run("SLICE_001")
+        self.assertEqual(r["phase"], "READY_FOR_OWNER_REVIEW")
+
+    def test_openai_responses_roles_custom_base_url_and_localhost_key(self):
+        from packages.fpf_runtime.adapters import OpenAIResponsesRoles
+        roles = OpenAIResponsesRoles("auto/gpt-5.6-luna", base_url="http://127.0.0.1:3425/v1")
+        self.assertEqual(roles.base_url, "http://127.0.0.1:3425/v1")
+        self.assertEqual(roles.api_key, "magpie")
+
+    def test_cli_windows_path_shlex_preserves_backslashes(self):
+        import shlex
+        cmd_str = r"python -m unittest D:\foo\bar"
+        args_win = shlex.split(cmd_str, posix=sys.platform != "win32")
+        self.assertIn(r"D:\foo\bar", args_win)
+
 
 if __name__ == "__main__":
     unittest.main()
