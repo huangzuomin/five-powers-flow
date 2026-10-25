@@ -336,6 +336,16 @@ def validate_qa_result(
     if str(qa_data.get("verdict")) == "PASS":
         if runner_sha == tested_sha or qa_contract_sha == tested_sha:
             errors.append("QA runner_sha and qa_contract_sha must differ from tested_sha")
+        if dev_data and repo_path:
+            base = str(dev_data.get("baseline_sha") or "")
+            if HEX_SHA_RE.fullmatch(base) and git_is_commit_object(base, repo_path):
+                for label, checked in (("runner_sha", runner_sha),
+                                       ("qa_contract_sha", qa_contract_sha)):
+                    if git_is_commit_object(checked, repo_path):
+                        code, _, _ = run_cmd(["git", "merge-base", "--is-ancestor",
+                                              checked, base], cwd=repo_path)
+                        if code != 0:
+                            errors.append(label + " is not pinned to a pre-DEV base/ancestor")
     if dev_data:
         if str(qa_data.get("task_id")) != str(dev_data.get("task_id")):
             errors.append("QA_RESULT task_id differs from DEV_HANDOFF task_id")

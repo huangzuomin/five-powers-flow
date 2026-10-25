@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import re
+from pathlib import Path
 import yaml
 
 ROLES = {
@@ -114,4 +115,98 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
             "Paste the matching prompt text from .fpf/prompts. "
             "Register real conversation links separately. "
             "This CLI cannot create ChatGPT product UI conversations.\n")
+
+    # Ship the enforcement mechanism, not only constitutional prose.
+    # Source-tree package mode is currently required; a missing resource
+    # fails closed rather than silently producing an unprotected project.
+    source = Path(__file__).resolve().parents[2]
+    shipping = [
+        "schemas/dev-handoff.schema.json",
+        "schemas/qa-result.schema.json",
+        "schemas/manifest.schema.json",
+        "schemas/work-order.schema.json",
+        "schemas/coordination-ledger.schema.json",
+        "packages/__init__.py",
+        "packages/fpf_policy/__init__.py",
+        "packages/fpf_policy/protected.py",
+        "packages/fpf_policy/pr_gate.py",
+        "packages/fpf_coordinator/__init__.py",
+        "packages/fpf_coordinator/coordinator.py",
+        "packages/fpf_gates/__init__.py",
+        "packages/fpf_gates/hook_guard_dev.py",
+    ]
+    for filename in shipping:
+        original = source / filename
+        if not original.is_file():
+            raise RuntimeError("Missing FPF vendor resource: " + filename)
+        if filename.startswith("schemas/"):
+            result[filename] = original.read_text(encoding="utf-8")
+        else:
+            result[".fpf/vendor/" + filename] = original.read_text(encoding="utf-8")
+    result[".fpf/vendor/guard_entry.py"] = (
+        "import sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+        "from packages.fpf_gates.hook_guard_dev import main\n"
+        "raise SystemExit(main())\n")
+    # GitHub Actions checks authenticated reviews, not author-filled text.
+    result[".github/workflows/validate-handoff-cards.yml"] = (
+        "name: FPF Trusted PR Review\n"
+        "on:\n"
+        "  pull_request:\n"
+        "    types: [opened, edited, synchronize, reopened]\n"
+        "  pull_request_review:\n"
+        "    types: [submitted, dismissed, edited]\n"
+        "permissions:\n"
+        "  contents: read\n"
+        "  pull-requests: read\n"
+        "jobs:\n"
+        "  validate-card:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          fetch-depth: 0\n"
+        "          persist-credentials: false\n"
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: '3.11'\n"
+        "      - run: python -m pip install pyyaml jsonschema\n"
+        "      - name: Verify independent reviewer and PR role route\n"
+        "        env:\n"
+        "          GH_TOKEN: " + "$" + "{{ github.token }}\n"
+        "        run: cd .fpf/vendor && python -m packages.fpf_policy.pr_gate\n")
+    result[".github/workflows/validate-schemas.yml"] = (
+        "name: FPF Contracts\n"
+        "on: [pull_request]\n"
+        "permissions:\n"
+        "  contents: read\n"
+        "jobs:\n"
+        "  validate:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: '3.11'\n"
+        "      - run: python -m pip install jsonschema\n"
+        "      - run: python -c 'import pathlib,json,jsonschema; [jsonschema.Draft7Validator.check_schema(json.loads(p.read_text())) for p in pathlib.Path(\"schemas\").glob(\"*.json\")]'\n")
+    result[".claude/settings.json"] = __import__("json").dumps(
+        {"hooks": {"PreToolUse": [{"matcher": "Write|Edit|NotebookEdit|Bash",
+                                  "hooks": [{"type": "command",
+                                             "command": "python .fpf/vendor/guard_entry.py"}]}]}},
+        indent=2) + "\n"
+    result[".github/CODEOWNERS"] = (
+        "# Replace the placeholder with actual independent project owners.\n"
+        "# This is intentionally not an active review policy until configured.\n"
+        "# * @REPLACE_WITH_REVIEWER\n"
+        "# AGENTS.md @REPLACE_WITH_REVIEWER\n"
+        "# .github/ @REPLACE_WITH_REVIEWER\n"
+        "# .fpf/ @REPLACE_WITH_REVIEWER\n"
+        "# docs/coordination/ @REPLACE_WITH_REVIEWER\n")
+    result[".fpf/REVIEWER-SETUP.md"] = (
+        "# Mandatory setup before allowing merges\n\n"
+        "Configure CODEOWNERS with a real independent GitHub account or GitHub App, "
+        "set required_approving_review_count >= 1, require the validate and "
+        "validate-card checks, and run FPF Doctor with --require-ready. "
+        "A single-author repository cannot claim independent QA approval.\n")
     return result

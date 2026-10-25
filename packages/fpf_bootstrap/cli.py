@@ -18,18 +18,27 @@ def main() -> int:
     ini.add_argument("--agent-mode", choices=("api", "manual"), default="api")
     ini.add_argument("--docs-dir", default="docs")
     ini.add_argument("--base-ref", default="HEAD")
+    ini.add_argument("--rollback", action="store_true",
+                     help="Explicitly rollback a safely identified incomplete bootstrap")
     ini.add_argument("--apply", action="store_true",
                      help="Create bootstrap, DEV and QA worktrees; does not commit or push")
     doc = commands.add_parser("doctor", help="Check existing project bootstrap")
     doc.add_argument("--repo", type=Path, required=True)
     doc.add_argument("--workspace-root", type=Path, required=True)
     doc.add_argument("--project-id", required=True)
+    doc.add_argument("--check", action="store_true",
+                     help="Only test physical provisioning; does not claim PROJECT_READY")
     commands.add_parser("run", help="Existing single-slice runtime (see --help there)")
     args, rest = p.parse_known_args()
     if args.command != "run" and rest:
         p.error("Unexpected arguments: " + " ".join(rest))
     try:
         if args.command == "init":
+            if args.rollback:
+                from .bootstrap import rollback
+                outcome = rollback(args.repo, args.workspace_root, args.project_id)
+                print(json.dumps(outcome, ensure_ascii=False, indent=2))
+                return 0
             proposal = plan(args.repo, args.workspace_root, args.project_id,
                             args.title, args.agent_mode, args.base_ref, args.docs_dir)
             if args.apply:
@@ -41,7 +50,8 @@ def main() -> int:
                 print(json.dumps(summary, ensure_ascii=False, indent=2))
             return 0
         if args.command == "doctor":
-            result = doctor(args.repo, args.workspace_root, args.project_id)
+            result = doctor(args.repo, args.workspace_root, args.project_id,
+                            require_ready=not args.check)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["ok"] else 2
         # The subcommand delegates to the original CLI without changing its arguments.

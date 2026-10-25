@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 import yaml
+from unittest.mock import patch
 from packages.fpf_bootstrap.artifacts import bundle, map_text
 from packages.fpf_bootstrap.bootstrap import apply, doctor, layout, plan
 from packages.fpf_bootstrap.discovery import git
@@ -122,6 +123,33 @@ class TestProjectBootstrap(unittest.TestCase):
         cmd(directory, "git", "init")
         with self.assertRaises(RuntimeError):
             apply(self.repo, p)
+
+    def test_doctor_check_only_can_succeed_without_claiming_approval(self):
+        apply(self.repo, self.proposal())
+        status = doctor(self.repo, self.workspace, "DEMO01", require_ready=False)
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["state"], "BOOTSTRAP_REVIEW")
+        self.assertTrue(status["requires_approval"])
+
+    def test_partial_initialize_has_persistent_pending_record_and_safe_rollback(self):
+        from packages.fpf_bootstrap import bootstrap
+        proposal = self.proposal()
+        real_ensure = bootstrap._ensure_worktree
+        calls = [0]
+        def interrupted(repo, directory, branch, sha):
+            calls[0] += 1
+            if calls[0] == 3:
+                raise RuntimeError("QA disk unavailable")
+            return real_ensure(repo, directory, branch, sha)
+        with patch.object(bootstrap, "_ensure_worktree", side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError, "disk unavailable"):
+                apply(self.repo, proposal)
+        state = Path(proposal["paths"]["state"])
+        self.assertEqual(json.loads(state.read_text())["bootstrap_state"], "PENDING")
+        self.assertFalse(doctor(self.repo, self.workspace, "DEMO01", require_ready=False)["ok"])
+        self.assertEqual(bootstrap.rollback(self.repo, self.workspace, "DEMO01")["rollback"], "COMPLETE")
+        self.assertFalse(state.exists())
+        self.assertEqual(git(self.repo, "branch", "--show-current"), "main")
 
     def test_invalid_project_id_refused(self):
         with self.assertRaises(ValueError):

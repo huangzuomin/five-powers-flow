@@ -34,6 +34,7 @@ def classify(paths: list[str], kind: str, baseline_files: set[str],
     if not changed or len(changed) != len(set(changed)):
         raise ValueError("Missing or duplicate changed paths")
     changed_set = set(changed)
+    baseline_files = {normalize_repo_path(p) for p in baseline_files}
     if kind == "BOOTSTRAP":
         if not branch.startswith("fpf/bootstrap-"):
             raise ValueError("BOOTSTRAP must originate from a bootstrap branch")
@@ -119,7 +120,8 @@ def gh_reviews(repo_slug: str, pr_num: int, token: str) -> list[dict]:
 
 def git_cmd(*args: str) -> str:
     p = subprocess.run(["git", *args], capture_output=True, text=True,
-                       timeout=30, check=False)
+                       timeout=30, cwd=os.environ.get("GITHUB_WORKSPACE") or None,
+                       check=False)
     if p.returncode:
         raise ValueError("Git verification error: " + p.stderr[-400:])
     return p.stdout.strip()
@@ -151,7 +153,8 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
             raise ValueError("DEV_HANDOFF.author must equal platform PR author")
         if str(card.get("tested_code_sha") or "").lower() != sha:
             raise ValueError("DEV_HANDOFF head SHA mismatch")
-        errs = coordinator.validate_dev_handoff(card, repo_path=Path.cwd())
+        errs = coordinator.validate_dev_handoff(
+            card, repo_path=Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd()))
         if errs:
             raise ValueError("DEV_HANDOFF invalid: " + "; ".join(errs))
         if str(qa.get("task_id")) != str(card.get("task_id")):
@@ -173,7 +176,7 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
         if subprocess.run(["git","merge-base","--is-ancestor",code_sha,base],
                           check=False).returncode:
             raise ValueError("MAP_UPDATE code_merged_sha is not merged into target base")
-    if pr_type == "POLICY_PR" and str(card.get("risk_acknowledged")) != "true":
+    if pr_type == "POLICY_PR" and str(card.get("risk_acknowledged")).lower() != "true":
         raise ValueError("POLICY_CHANGE must explicitly acknowledge governance risk")
     return pr_type + " independently reviewed by " + reviewer + " (identity only)"
 

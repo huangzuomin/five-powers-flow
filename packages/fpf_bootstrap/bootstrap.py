@@ -90,6 +90,18 @@ def apply(repo: Path, proposed: dict) -> dict:
         if (state["project_id"] != proposed["project_id"] or
                 state["baseline_sha"] != sha or state["repo"] != str(repo)):
             raise RuntimeError("Existing bootstrap state conflicts with proposal")
+    paths["root"].mkdir(parents=True, exist_ok=True)
+    if not previous.exists():
+        # Write recoverable intent before the first non-atomic Git worktree action.
+        _atomic_json(previous, {
+            "project_id": proposed["project_id"], "repo": str(repo),
+            "baseline_sha": sha, "bootstrap_state": "PENDING",
+            "agent_status": "CONFIGURED_NOT_VERIFIED",
+            "agent_mode": proposed["mode"],
+            "paths": proposed["paths"], "branches": proposed["branches"],
+            "generated_files": sorted(proposed["files"]),
+            "human_approval_required": True, "slice_authorized": False,
+        })
     _ensure_worktree(repo, paths["bootstrap"], proposed["branches"]["bootstrap"], sha)
     _ensure_worktree(repo, paths["dev"], proposed["branches"]["dev"], sha)
     _ensure_worktree(repo, paths["qa"], None, sha)
@@ -116,7 +128,65 @@ def apply(repo: Path, proposed: dict) -> dict:
     _atomic_json(previous, state)
     return state
 
-def doctor(repo: Path, workspace_root: Path, project_id: str) -> dict:
+def rollback(repo: Path, workspace_root: Path, project_id: str) -> dict:
+    """Remove only pristine worktrees from an incomplete, recorded bootstrap."""
+    repo = absolute_repo(repo)
+    paths = layout(repo, workspace_root, project_id)
+    if not paths["state"].is_file():
+        raise RuntimeError("No recorded bootstrap to rollback")
+    state = json.loads(paths["state"].read_text(encoding="utf-8"))
+    if state.get("bootstrap_state") != "PENDING":
+        raise RuntimeError("Rollback is only supported while bootstrap is PENDING")
+    if state.get("project_id") != project_id or state.get("repo") != str(repo):
+        raise RuntimeError("State does not belong to this project")
+    sha = state["baseline_sha"]
+    from .discovery import inventory
+    candidate = bundle(project_id, project_id, inventory(repo, sha),
+                       state.get("agent_mode", "api"))
+    # Inspect all worktrees before deleting even one. No force unless the
+    # *entire* dirty surface is an exact generated bootstrap file.
+    for role in ("bootstrap", "dev", "qa"):
+        path = paths[role]
+        if not path.exists():
+            continue
+        if not path.is_dir() or _common(path) != _common(repo):
+            raise RuntimeError("Foreign worktree; rollback refused: " + role)
+        if git(path, "rev-parse", "HEAD") != sha:
+            raise RuntimeError("Advanced worktree; rollback refused: " + role)
+        if role in ("dev", "qa") and git(path, "status", "--porcelain"):
+            raise RuntimeError("Dirty worktree; rollback refused: " + role)
+        if role == "bootstrap":
+            # Check the entire untracked directory tree, rather than relying
+            # on git status which can abbreviate untracked directories.
+            actual = {
+                file.relative_to(path).as_posix()
+                for file in path.rglob("*") if file.is_file()
+                and ".git" not in file.relative_to(path).parts
+            }
+            expected = set(candidate) | {".git"}
+            for name in actual:
+                if name not in expected:
+                    raise RuntimeError("Unexpected user file; rollback refused: " + name)
+                if (path / name).read_text(encoding="utf-8") != candidate[name]:
+                    raise RuntimeError("Modified generated file; rollback refused: " + name)
+    for role in ("qa", "dev", "bootstrap"):
+        path = paths[role]
+        if path.exists():
+            git(repo, "worktree", "remove", "--force", str(path))
+        branch = state["branches"].get(role)
+        if branch:
+            p = subprocess.run(["git", "show-ref", "--verify", "--quiet",
+                                "refs/heads/" + branch], cwd=repo, check=False)
+            if p.returncode == 0:
+                if git(repo, "rev-parse", branch) != sha:
+                    raise RuntimeError("Advanced branch; rollback refused: " + branch)
+                git(repo, "branch", "-D", branch)
+    paths["state"].unlink()
+    return {"project_id": project_id, "rollback": "COMPLETE"}
+
+
+def doctor(repo: Path, workspace_root: Path, project_id: str,
+           require_ready: bool = True) -> dict:
     repo = absolute_repo(repo)
     paths = layout(repo, workspace_root, project_id)
     errors = []
@@ -144,9 +214,16 @@ def doctor(repo: Path, workspace_root: Path, project_id: str) -> dict:
     for filename in state["generated_files"]:
         if not (paths["bootstrap"] / filename).is_file():
             errors.append("Missing project artifact: " + filename)
-    if state.get("agent_status") != "VERIFIED":
-        errors.append("Agent conversations are configured but have NOT been provisioned/verified")
-    errors.append("Bootstrap map has not been approved and merged into the target main branch")
-    return {"project_id": project_id, "state": "BOOTSTRAP_REVIEW" if not errors else "BOOTSTRAP_PARTIAL",
+    if state.get("bootstrap_state") == "PENDING":
+        errors.append("Bootstrap is PENDING; resume fpf init --apply or inspect before --rollback")
+    if require_ready:
+        # Do not take approval from an editable local JSON boolean. Only a
+        # future server-authorized bootstrap review/commit can establish READY.
+        if state.get("agent_status") != "VERIFIED":
+            errors.append("Agent conversations are configured but have NOT been provisioned/verified")
+        errors.append("Bootstrap map has not been approved and merged into the target main branch")
+    return {"project_id": project_id,
+            "state": ("BOOTSTRAP_PARTIAL" if errors else
+                      ("BOOTSTRAP_REVIEW" if not require_ready else "PROJECT_READY")),
             "ok": not errors, "issues": errors, "paths": state.get("paths", {}),
-            "baseline_sha": sha}
+            "baseline_sha": sha, "requires_approval": True}

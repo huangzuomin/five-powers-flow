@@ -14,7 +14,9 @@ EXACT = frozenset({
     "docs/coordination/handoff-protocol.md",
     "handoff-protocol.md", ".claude/settings.json",
 })
-PREFIXES = (".github/", ".fpf/", "schemas/")
+PREFIXES = (".github/", ".fpf/", "schemas/",
+            "packages/fpf_policy/", "packages/fpf_coordinator/",
+            "packages/fpf_gates/")
 
 def normalize_repo_path(path: str) -> str:
     path = str(path).replace("\\", "/").strip().lower()
