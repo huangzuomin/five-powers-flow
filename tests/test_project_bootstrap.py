@@ -157,6 +157,18 @@ class TestProjectBootstrap(unittest.TestCase):
         self.assertFalse(state.exists())
         self.assertEqual(git(self.repo, "branch", "--show-current"), "main")
 
+    def test_rollback_preserves_custom_title_and_base_ref(self):
+        from packages.fpf_bootstrap import bootstrap
+        proposal = self.proposal()
+        apply(self.repo, proposal)
+        state_path = Path(proposal["paths"]["state"])
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["bootstrap_state"] = "PENDING"
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+        result = bootstrap.rollback(self.repo, self.workspace, "DEMO01")
+        self.assertEqual(result["rollback"], "COMPLETE")
+        self.assertFalse(state_path.exists())
+
     def test_invalid_project_id_refused(self):
         with self.assertRaises(ValueError):
             plan(self.repo, self.workspace, "../escape", "Oops", "api")

@@ -65,6 +65,7 @@ def plan(repo: Path, workspace_root: Path, project_id: str,
         raise RuntimeError("Project already has governance files; refusing overwrite: " +
                            ", ".join(collision[:12]))
     return {"project_id": project_id, "title": title or project_id, "mode": mode,
+            "base_ref": base_ref, "docs_dir": docs_dir,
             "discovery": discovered, "paths": {k: str(v) for k, v in paths.items()},
             "files": files, "branches": {
                 "bootstrap": "fpf/bootstrap-" + project_id,
@@ -98,6 +99,9 @@ def apply(repo: Path, proposed: dict) -> dict:
             "baseline_sha": sha, "bootstrap_state": "PENDING",
             "agent_status": "CONFIGURED_NOT_VERIFIED",
             "agent_mode": proposed["mode"],
+            "title": proposed.get("title", proposed["project_id"]),
+            "base_ref": proposed.get("base_ref", "HEAD"),
+            "docs_dir": proposed.get("docs_dir", "docs"),
             "paths": proposed["paths"], "branches": proposed["branches"],
             "generated_files": sorted(proposed["files"]),
             "human_approval_required": True, "slice_authorized": False,
@@ -120,6 +124,9 @@ def apply(repo: Path, proposed: dict) -> dict:
         "project_id": proposed["project_id"], "repo": str(repo),
         "baseline_sha": sha, "bootstrap_state": "BOOTSTRAP_REVIEW",
         "agent_mode": proposed["mode"], "agent_status": "CONFIGURED_NOT_VERIFIED",
+        "title": proposed.get("title", proposed["project_id"]),
+        "base_ref": proposed.get("base_ref", "HEAD"),
+        "docs_dir": proposed.get("docs_dir", "docs"),
         "paths": proposed["paths"], "branches": proposed["branches"],
         "generated_files": sorted(proposed["files"]), "human_approval_required": True,
         "slice_authorized": False,
@@ -141,7 +148,10 @@ def rollback(repo: Path, workspace_root: Path, project_id: str) -> dict:
         raise RuntimeError("State does not belong to this project")
     sha = state["baseline_sha"]
     from .discovery import inventory
-    candidate = bundle(project_id, project_id, inventory(repo, sha),
+    title = state.get("title", project_id)
+    base_ref = state.get("base_ref", "HEAD")
+    docs_dir = state.get("docs_dir", "docs")
+    candidate = bundle(project_id, title, inventory(repo, base_ref, docs_dir),
                        state.get("agent_mode", "api"))
     # Inspect all worktrees before deleting even one. No force unless the
     # *entire* dirty surface is an exact generated bootstrap file.
