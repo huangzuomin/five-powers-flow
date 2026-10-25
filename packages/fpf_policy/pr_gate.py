@@ -141,7 +141,7 @@ def gh_reviews(repo_slug: str, pr_num: int, token: str) -> list[dict]:
 
 def git_cmd(*args: str) -> str:
     p = subprocess.run(["git", *args], capture_output=True, text=True,
-                       timeout=30, cwd=os.environ.get("GITHUB_WORKSPACE") or None,
+                       timeout=30, cwd=os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or None,
                        check=False)
     if p.returncode:
         raise ValueError("Git verification error: " + p.stderr[-400:])
@@ -176,7 +176,7 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
         if str(card.get("tested_code_sha") or "").lower() != sha:
             raise ValueError("DEV_HANDOFF head SHA mismatch")
         errs = coordinator.validate_dev_handoff(
-            card, repo_path=Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd()))
+            card, repo_path=Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd()))
         if errs:
             raise ValueError("DEV_HANDOFF invalid: " + "; ".join(errs))
         if str(qa.get("task_id")) != str(card.get("task_id")):
@@ -184,7 +184,7 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
         if str(qa.get("runner_sha")) == sha or str(qa.get("qa_contract_sha")) == sha:
             raise ValueError("QA toolchain must be pinned independently of PR tested code")
         from packages.fpf_policy.qa_artifact import independent_qa_evidence
-        repo_dir = Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
+        repo_dir = Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
         with independent_qa_evidence(
             repo=os.environ["GITHUB_REPOSITORY"], qa=qa,
             reviewer=reviewer, tested_sha=sha,

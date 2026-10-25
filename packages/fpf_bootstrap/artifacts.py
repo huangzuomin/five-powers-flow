@@ -218,6 +218,10 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
         "set required_approving_review_count >= 1, require the validate and "
         "validate-card checks, and run FPF Doctor (full readiness check). "
         "A single-author repository cannot claim independent QA approval.\n")
+    # A template is not an approved QA plan; explicitly non-executable.
+    result[".fpf/qa-plan.example.json"] = (
+        source / "templates/qa-plan.example.json"
+    ).read_text(encoding="utf-8")
     result[".fpf/QA-PLAN-SETUP.md"] = (
         "# Independent QA plan\n\n"
         "A real separate reviewer must configure .fpf/qa-plan.json on protected main "
