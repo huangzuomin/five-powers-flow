@@ -31,7 +31,7 @@
 
 1. **工具集硬剔除**：在支持的平台（如 Claude Code `Explore`/`Plan` 子代理）中，直接剔除写操作工具（`Edit`/`Write`），使规划与监察角色在物理层面无法修改代码；
 2. **Pre-Push / Pre-Tool-Use 钩子拦截**：在本地 Git Hook 与工具调用层部署哨兵，**通过客户端钩子与服务端 CODEOWNERS + CI 双层阻断研发工位（DEV）向 `PROJECT-MAP.md` 窜写**（详见 [templates/git-hooks/pre-push.template](templates/git-hooks/pre-push.template)）；
-3. **密码学 SHA 强一致性校验**：由中立校验脚本强制核对 `qa_card.tested_sha == dev_card.tested_code_sha`，且必须在 Git 对象库中物理存在（`git cat-file -t` == commit），从代码层杜绝伪造验收。
+3. **密码学 SHA 强一致性校验**：由中立校验脚本强制核对 `qa_card.tested_sha == dev_card.tested_code_sha`，且必须在 Git 对象库中物理存在（`git cat-file -t` == commit），通过可信执行证据降低伪造验收风险。
 
 ---
 
@@ -59,10 +59,10 @@
 ```
 
 1. **跨异构 Agent 通信总线**：彻底解决 ChatGPT、Claude、Codex、DeepSeek 等不同厂商、无局域网互通模型之间的异步数据交换难题。所有任务令与报告均通过 GitHub Issue / PR 的标准化 YAML 卡片传递。
-2. **不可篡改的法定证据链**：AI 聊天记录随时会被压缩或遗忘，但 GitHub 上的 40 位 Commit SHA、Diff 记录具备密码学不可篡改性。“聊天仅供通知，GitHub 才是法定裁判依据”。
+2. **可核验的证据锚点**：AI 聊天记录随时会被压缩或遗忘，但 GitHub 上的 40 位 Commit SHA、Diff 记录具备密码学哈希完整性（不证明出具者身份）。“聊天仅供通知，GitHub 才是法定裁判依据”。
 3. **无中心数据库的状态机表面**：切片生命周期（待开发、提测中、QA审查中、待合并）直接投射为 GitHub Labels 与状态流，无需外部专用数据库。
-4. **主权隔离与权限防火墙**：GitHub 分支保护规则（Branch Protection）与合并锁，从物理底层保障了“人类最高决策权不可被 Agent 篡夺”。未经人类点击 Merge，主干代码纹丝不动。
-5. **物理工位的纯净克隆锚点**：DEV 与 QA 两个独立 Worktree 均以 GitHub 远端锁定的确切 Commit SHA 为基准，绝不把本地脏文件带入测试。
+4. **主权隔离与权限防火墙**：GitHub 分支保护规则（Branch Protection）与合并锁，从在正确配置且权限隔离的前提下加强“人类最高决策权不可被 Agent 篡夺”。未经人类点击 Merge，主干代码纹丝不动。
+5. **物理工位的纯净克隆锚点**：DEV 与 QA 两个独立 Worktree 均以 GitHub 远端锁定的确切 Commit SHA 为基准，应校验固定 SHA 并拒绝本地脏文件污染。
 6. **双 PR 制衡法定执行场**：代码 PR（DEV 提）与地图 PR（地图总控提）在 GitHub 上物理分离，使“写代码者严禁自改试卷”在平台机制层面得到铁腕落实。
 
 ---
@@ -100,6 +100,11 @@
 
 ## 🚀 快速上手 (Getting Started)
 
+### 0. 新项目首次初始化（Bootstrap 0.3）
+
+先运行 `fpf init --repo <项目路径> --workspace-root <外部工位路径> --project-id DEMO01` 获取只读计划，确认后追加 `--apply` 创建 Bootstrap、DEV 与 QA 工作区。使用 `fpf doctor` 检查物理工位和资源状态。**初始化不会创建 ChatGPT 产品内聊天、真实 QA 签名或自动合并项目地图。** 详见 [BOOTSTRAP.md](docs/BOOTSTRAP.md)。
+
+
 当前仓库提供完整的 **协议规范 (RFC-001)**、**数据 Schema 契约**、**机械门禁参考脚本** 与 **开箱即用模板**。
 
 ### 1. 运行本地提测前门禁 (Pre-Handoff Quality Gate)
@@ -115,7 +120,7 @@ python packages/fpf_gates/pre_handoff.py --base main
 ### 2. 验证交接卡与 SHA 链条一致性
 协调中枢对提测卡与质检卡进行机器级强验证：
 ```bash
-python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-card qa_result.yaml --evidence-dir docs/evidence --check-git
+python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-card qa_result.yaml --evidence-dir <真实外部证据目录> --check-git
 ```
 脚本将验证：
 - 卡片所有必填字段与 Schema 约束；
@@ -126,7 +131,7 @@ python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-
 ### 3. 第一个 PR 走通标准闭环 (First Walkthrough via Protocol)
 1. **DEV 发起分支与开发**：在独立 worktree 或特性分支开发，本地运行 `python packages/fpf_gates/pre_handoff.py --base main`；
 2. **提交代码 PR**：在 PR 描述中填入合规 `DEV_HANDOFF` 卡片；CI 自动触发并验证卡片与 SHA 绑定；
-3. **QA 独立工位验收**：检出 PR 分支，执行对抗验证，输出 `docs/evidence/` 与 `manifest.json`，在评论中签署 `QA_RESULT`；
+3. **QA 独立工位验收**：检出 PR 分支，执行对抗验证，在独立 QA 工位生成实际证据包（不得以仓库示例替代），在评论中签署 `QA_RESULT`；
 4. **人类终审与 Squash Merge**：人类负责人核查红绿简报并在 GitHub 点击 Merge，主干生成正式提交 SHA；
 5. **地图总控发起地图 PR**：根据代码 commit SHA 提交包含 `MAP_UPDATE` 的纯文档 PR，经 CI 验证祖先关系后由人类合入主干。
 
@@ -139,48 +144,17 @@ python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-
 
 ---
 
-## 📂 仓库结构 (Repository Layout)
+## 📂 仓库结构与实际能力
 
-```text
-five-powers-flow/
-├── README.md                           # 框架主说明文档
-├── CHANGELOG.md                        # 语义化版本变更历史 (Keep a Changelog)
-├── pyproject.toml                      # 现代化 Python 构建与测试工程元数据
-├── LICENSE                             # Apache 2.0 开源许可证
-├── CONTRIBUTING.md                     # 开源贡献指南
-├── CODE_OF_CONDUCT.md                  # 行为准则
-├── SECURITY.md                         # 安全策略
-├── .github/
-│   ├── CODEOWNERS                      # 服务端治理文档所有权硬锁定
-│   └── workflows/
-│       ├── validate-schemas.yml        # CI: 契约语法元校验与边界测试
-│       └── validate-handoff-cards.yml  # CI: PR 交付卡密码学与作用域强校验
-├── docs/
-│   ├── SPECIFICATION.md                # FPF-RFC-001 协议规范完整条令 (v1.2.1)
-│   ├── EVIDENCE-SPEC.md                # 32 项标准证据包规范 (四级分级 Profile)
-│   └── CLAUDE-CODE-GUIDE.md            # Claude Code 机械强制落地指南
-├── .claude/
-│   └── settings.json                   # Claude Code 原生 PreToolUse 钩子治理配置
-├── schemas/                            # 机器可读的 JSON / YAML 契约规范 (Draft-07)
-│   ├── work-order.schema.json          # 架构工作令 Schema
-│   ├── dev-handoff.schema.json         # 研发交付卡 Schema (含 not_run 矩阵与 SHA 强制)
-│   ├── qa-result.schema.json           # 质检裁决卡 Schema (强制 exit_code 验证与双向 SHA)
-│   ├── manifest.schema.json            # 32 项证据包清册 Schema (Profile 强制)
-│   └── coordination-ledger.schema.json # 调度协调账本 Schema
-├── templates/                          # 开箱即用的项目模板套件
-│   ├── AGENTS.md.template              # 通用仓库智能体红线规范
-│   ├── PROJECT-MAP.md.template         # 单一项目地图模板
-│   ├── LESSONS.md.template             # 错题本制度模板
-│   ├── HANDOFF-PROTOCOL.md.template    # 项目交接协议模板
-│   └── git-hooks/pre-push.template     # 物理防窜写 Git 推送拦截钩子 (merge-base 强化)
-├── tests/
-│   └── test_trusted_evaluator.py       # 密码学断言与安全边界单元测试套件
-└── packages/                           # 核心门禁与验证器实现
-    ├── fpf_coordinator/coordinator.py  # 协调器与密码学 SHA/作用域/证据包强校验器
-    └── fpf_gates/pre_handoff.py        # 交付前四道机械门禁检查器 (含敏感产物审计)
-```
+实际目录请以 GitHub 仓库和 `git ls-files` 为准，不再维护容易过时的手工目录树。
 
----
+- `packages/fpf_bootstrap/`：项目初始化规划、初始项目地图、工作区创建与 doctor。
+- `packages/fpf_runtime/`：单切片 DEV/QA 执行、重试、状态与本地证据。
+- `packages/fpf_coordinator/`：卡片、Git、证据与生命周期验证器。
+- `packages/fpf_gates/`：本地前置检查；`packages/fpf_policy/`：共享保护路径。
+- `schemas/`：交接与证据契约；`tests/`：离线边界与集成模拟测试。
+
+**可信边界**：GitHub CI 成功不应被解释为独立 QA PASS，除非校验了平台身份、真实测试产物及对应的 PR Head SHA。代码库示例证据已撤销，见 [证据格式说明](docs/EVIDENCE-EXAMPLE.md)。
 
 ## 🤝 参与贡献 (Contributing)
 

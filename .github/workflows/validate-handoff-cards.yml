@@ -1,173 +1,39 @@
-name: Validate PR Handoff Cards & Dual-PR Anti-Tamper Gate
+name: Validate FPF PR Role Separation and Handoff
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   validate-card:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout full git history
+      - name: Checkout PR and base history (untrusted source)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Full depth required for git cat-file, diff, and merge-base
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install jsonschema pyyaml
+      - name: Install validation dependencies
+        run: python -m pip install jsonschema pyyaml
 
-      - name: Classify PR & Enforce Dual-PR Anti-Tamper Routing
-        id: classify-pr
-        run: |
-          base_sha="${{ github.event.pull_request.base.sha }}"
-          head_sha="${{ github.event.pull_request.head.sha }}"
-          echo "Inspecting changes between base $base_sha and head $head_sha"
-
-          all_changed=$(git diff --name-only "$base_sha...$head_sha")
-          echo "Changed files in PR:"
-          echo "$all_changed"
-
-          if [ -z "$all_changed" ]; then
-            echo "::error::[FPF GATE BLOCK] Pull Request introduces zero file changes."
-            exit 1
-          fi
-
-          protected_files=$(echo "$all_changed" | grep -Ei "(^|/)(PROJECT[-_]MAP|LESSONS)\.md$" || true)
-          other_files=$(echo "$all_changed" | grep -vEi "(^|/)(PROJECT[-_]MAP|LESSONS)\.md$" || true)
-
-          if [ -n "$protected_files" ] && [ -z "$other_files" ]; then
-            echo "pr_type=MAP_PR" >> "$GITHUB_OUTPUT"
-            echo "PR classified as [MAP_PR]: Exclusively modifies project map / lessons governance documents."
-          elif [ -n "$protected_files" ] && [ -n "$other_files" ]; then
-            echo "::error::[FPF CRITICAL GATE BLOCK] Contaminated PR: Mixed code changes with protected governance files!"
-            echo "Modified governance files: $protected_files"
-            echo "Under FPF Dual-PR rule, code PRs and map PRs must never be mixed."
-            exit 1
-          else
-            echo "pr_type=CODE_PR" >> "$GITHUB_OUTPUT"
-            echo "PR classified as [CODE_PR]: Normal software development PR."
-          fi
-
-      - name: Validate MAP_PR Governance Integrity
-        if: steps.classify-pr.outputs.pr_type == 'MAP_PR'
+      - name: Fail-closed GitHub-authenticated review and PR routing
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          python - <<'PY'
-          import os, re, sys, subprocess, yaml
-
-          body = os.environ.get("PR_BODY") or ""
-          base_sha = os.environ.get("BASE_SHA") or "main"
-
-          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*['\"]?MAP_UPDATE['\"]?[\s\S]*?)```", body, re.IGNORECASE)
-          if not m:
-              print("::error::[FPF GATE BLOCK] MAP_PR body must include a ```yaml MAP_UPDATE ... ``` card.")
-              print("Required fields: kind: MAP_UPDATE, code_pr_number, code_merged_sha, scribe.")
-              sys.exit(1)
-
-          card_yaml = m.group(1).strip()
-          card = yaml.safe_load(card_yaml)
-
-          code_sha = str(card.get("code_merged_sha", "")).strip()
-          if not re.match(r"^[0-9a-fA-F]{40}$", code_sha):
-              print(f"::error::[FPF GATE BLOCK] MAP_UPDATE code_merged_sha must be a 40-digit commit SHA, got: '{code_sha}'")
-              sys.exit(1)
-
-          # Verify code_merged_sha physically exists in repository
-          cat_res = subprocess.run(["git", "cat-file", "-t", code_sha], capture_output=True, text=True)
-          if cat_res.returncode != 0 or cat_res.stdout.strip() != "commit":
-              print(f"::error::[FPF GATE BLOCK] code_merged_sha '{code_sha}' does not exist as a commit in this repository!")
-              sys.exit(1)
-
-          # Verify code_merged_sha is an ancestor of main/base
-          anc_res = subprocess.run(["git", "merge-base", "--is-ancestor", code_sha, base_sha], capture_output=True, text=True)
-          if anc_res.returncode != 0:
-              print(f"::error::[FPF GATE BLOCK] code_merged_sha '{code_sha}' is NOT merged into target branch '{base_sha}'!")
-              sys.exit(1)
-
-          print("✅ MAP_PR verified: anchored to physically merged Code commit " + code_sha)
-          PY
-
-      - name: Extract, Validate and Authenticate CODE_PR Card
-        if: steps.classify-pr.outputs.pr_type == 'CODE_PR'
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python - <<'PY'
-          import os, re, sys, pathlib, yaml, json, jsonschema
-
-          body = os.environ.get("PR_BODY") or ""
-          head_sha = str(os.environ.get("PR_HEAD_SHA") or "").strip().lower()
-
-          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*['\"]?DEV_HANDOFF['\"]?[\s\S]*?)```", body, re.IGNORECASE)
-          if not m:
-              print("::error::[FPF P0-01 GATE FAILURE] CODE_PR body is MISSING a mandatory DEV_HANDOFF card!")
-              print("Under FPF RFC-001, code pull requests without DEV_HANDOFF are strictly prohibited from merging.")
-              sys.exit(1)
-
-          card_yaml = m.group(1).strip()
-          pathlib.Path("dev-card.yml").write_text(card_yaml, encoding="utf-8")
-
-          # 1. Validate Schema
-          schema = json.loads(pathlib.Path("schemas/dev-handoff.schema.json").read_text(encoding="utf-8"))
-          card_data = yaml.safe_load(card_yaml)
-          jsonschema.Draft7Validator(schema).validate(card_data)
-          print("✅ DEV_HANDOFF satisfies JSON Schema draft-07 contract.")
-
-          # 2. P1-1 Binding: Validate tested_code_sha strictly matches PR head.sha
-          tested_sha = str(card_data.get("tested_code_sha", "")).strip().lower()
-          if tested_sha != head_sha:
-              print(f"::error::[FPF P1-01 ENTITY MISMATCH] DEV_HANDOFF tested_code_sha ('{tested_sha}') does not match PR head.sha ('{head_sha}')!")
-              print("The handoff card must certify the exact commit tested in this pull request.")
-              sys.exit(1)
-
-          print(f"✅ DEV_HANDOFF strictly bound to PR head commit: {tested_sha}")
-          PY
-
-      - name: Run Cryptographic SHA & Scope Verification for CODE_PR
-        if: steps.classify-pr.outputs.pr_type == 'CODE_PR'
+          GH_TOKEN: ${{ github.token }}
         run: |
           export PYTHONPATH=.
-          python -m packages.fpf_coordinator.coordinator --dev-card dev-card.yml --check-git
+          python -m packages.fpf_policy.pr_gate
 
-      - name: Extract, Validate and Authenticate QA_RESULT Card (if present)
-        if: steps.classify-pr.outputs.pr_type == 'CODE_PR'
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          python - <<'PY'
-          import os, re, sys, pathlib, yaml, json, jsonschema
-
-          body = os.environ.get("PR_BODY") or ""
-          m = re.search(r"```ya?ml\s*([\s\S]*?kind:\s*['\"]?QA_RESULT['\"]?[\s\S]*?)```", body, re.IGNORECASE)
-          if not m:
-              print("ℹ️ No QA_RESULT card present in PR body yet (awaiting independent QA review).")
-              sys.exit(0)
-
-          card_yaml = m.group(1).strip()
-          pathlib.Path("qa-card.yml").write_text(card_yaml, encoding="utf-8")
-
-          schema = json.loads(pathlib.Path("schemas/qa-result.schema.json").read_text(encoding="utf-8"))
-          card_data = yaml.safe_load(card_yaml)
-          jsonschema.Draft7Validator(schema).validate(card_data)
-          print("✅ QA_RESULT satisfies JSON Schema draft-07 contract.")
-          PY
-
-      - name: Run QA Cryptographic Verification (if QA_RESULT present)
-        if: steps.classify-pr.outputs.pr_type == 'CODE_PR' && hashFiles('qa-card.yml') != ''
-        run: |
-          export PYTHONPATH=.
-          EVID_ARG=""
-          if [ -d "docs/evidence" ]; then
-            EVID_ARG="--evidence-dir docs/evidence"
-          fi
-          python -m packages.fpf_coordinator.coordinator --dev-card dev-card.yml --qa-card qa-card.yml $EVID_ARG --check-git
+      # A CODE_PR cannot report green for self-authored QA text. Require a
+      # verified independent QA artifact producer before enabling code merge.

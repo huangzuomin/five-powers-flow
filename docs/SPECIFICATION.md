@@ -24,7 +24,7 @@
                 │             GitHub (唯一法定事实源与总线)              │
                 ├────────────────────────────────────────────────────────┤
                 │  1. 跨异构 Agent 异步通信总线 (Issue/PR/Structured YAML)│
-                │  2. 不可篡改的证据链与 Git Commit 锚点 (40-digit SHA)  │
+                │  2. 可检测篡改的证据链与 Git Commit 锚点 (40-digit SHA)  │
                 │  3. 无数据库的公开状态机 (Labels & Lifecycle Tracking) │
                 │  4. 主权隔离与权限物理防火墙 (Branch Protection & Merge)│
                 │  5. 物理工位纯净克隆锚点 (Git Worktree Base)           │
@@ -40,9 +40,9 @@
 
 ### 2.1 跨异构 Agent 异步通信总线 (Universal Asynchronous Message Bus)
 - **破除厂商壁垒**：参与项目的智能体往往来自不同模型平台（如 ChatGPT 网页版、Claude CLI、本地 Codex、DeepSeek 专有模型等），它们之间无局域网互通、无跨厂商 RPC。
-- **全异步可靠载体**：GitHub Issue、PR 描述、Issue 评论（Comment）是所有 Agent 唯一允许交换任务与结果的媒介。所有通信均采用标准的 `WORK_ORDER`、`DEV_HANDOFF`、`QA_RESULT`、`MAP_UPDATE` 结构化 YAML 区块，自带时间戳，异步持久化，永不丢失。
+- **全异步可靠载体**：GitHub Issue、PR 描述、Issue 评论（Comment）是所有 Agent 唯一允许交换任务与结果的媒介。所有通信均采用标准的 `WORK_ORDER`、`DEV_HANDOFF`、`QA_RESULT`、`MAP_UPDATE` 结构化 YAML 区块，自带时间戳，异步持久化，由平台持久保存（仍需备份及权限保护）。
 
-### 2.2 不可篡改的法定证据链 (Tamper-Evident Canonical Ledger)
+### 2.2 可核验的证据锚点 (Tamper-Evident Canonical Ledger)
 - **对抗上下文压缩与遗忘**：聊天上下文会随着对话轮次增加被自动 Compact 或发生模型幻觉，但 GitHub 上的 Git Commit、代码 Diff、提交记录具备密码学哈希保证（40 位 SHA）。
 - **口说无凭，Git 证据为准**：任何 Agent 宣称“功能已完成”或“测试已通过”，若不能在 GitHub 对应 PR 中提供确凿的 40 位 Commit SHA 及可重放日志引用，一律视为无效陈述。
 
@@ -52,11 +52,11 @@
 
 ### 2.4 主权隔离与权限物理防火墙 (Constitutional Sovereign Firewall)
 - **代码不可侵犯闸门**：GitHub 的 **分支保护规则 (Branch Protection Rules)** 与 **强制审查 (Required Reviews)**，是物理上锁死“人类最高决策权不可被 Agent 篡夺”的最后防线。
-- 无论 Agent 自我宣称多么完美、测试多么绿灯，只要人类未在 GitHub 网页或客户端点击 **Confirm Merge**，受保护的 `main` 分支物理上坚不可摧，彻底杜绝 AI 擅自合并和污染生产代码。
+- 无论 Agent 自我宣称多么完美、测试多么绿灯，只要人类未在 GitHub 网页或客户端点击 **Confirm Merge**，受保护的 `main` 分支在正确配置审批策略时减少 AI 擅自合并和污染生产代码。
 
 ### 2.5 物理工位环境纯净锚点 (Clean Workspace Anchor)
 - DEV 工位和 QA 工位各自拉取独立的 Git Worktree，其代码基线完全以 GitHub 远端推送的确定性 SHA 为锚点。
-- QA 独立工位验证的代码，必须是 DEV 已经推送到 GitHub 远端 PR 的确切版本，绝不测试 DEV 电脑上的本地脏暂存，确保验证结果 100% 可被第三方复现。
+- QA 独立工位验证的代码，必须是 DEV 已经推送到 GitHub 远端 PR 的确切版本，绝不测试 DEV 电脑上的本地脏暂存，为可复算的第三方验证提供固定版本锚点。
 
 ### 2.6 双 PR 制衡法定执行场 (Dual-PR Separation Field)
 - **代码 PR**（DEV 发起）包含业务代码与自测代码；**地图 PR**（地图总控发起）仅修改 `docs/coordination/PROJECT-MAP.md`。
@@ -122,7 +122,7 @@ dev_checks:
     exit_code: 0
 not_run:                                     # 严禁留空；若声明 100% 覆盖需提供 exemption_justification
   - "e2e-browser-matrix"
-not_run_exemption_justification: ""          # 仅在 not_run 为空时必填（最低 15 字符）
+# not_run 需要显式列出尚未覆盖的边界；不得以自由文本豁免
 known_risks:
   - "已知边界缺陷或遗留风险"
 state: "DEV_READY_FOR_QA"                    # 枚举: DEV_READY_FOR_QA | DEV_BLOCKED
@@ -141,7 +141,7 @@ author: "qa-auditor-identity"               # 签署者标识，严禁与 DEV �
 profile: "Library"                          # 枚举: Library | API-DB | Full-Stack | Rework
 environment: "Ubuntu 22.04 LTS, Python 3.11"
 verdict: "PASS"                             # 枚举: PASS | FAIL | BLOCKED | NOT_RUN | INVALID_TEST
-evidence_manifest_sha256: "64位十六进制哈希"  # docs/evidence/manifest.json 的物理重算哈希
+evidence_manifest_sha256: "64位十六进制哈希"  # <独立 QA 证据目录>/manifest.json 的物理重算哈希
 checks:
   - name: "unit_and_integration"
     command: "pytest tests/"
@@ -197,10 +197,10 @@ DEV 提测前必须在本地通过四道物理门禁（`packages/fpf_gates/pre_h
 4. **刚性约束**：智能体任务书与 `AGENTS.md` 强制约定：“编码前必须查阅错题本，复犯已知缺陷直接判 DEV FAIL”。
 
 ### 6.4 32 项证据包与分级 Profile 契约 (Evidence Pack & Profiles)
-详见 [docs/EVIDENCE-SPEC.md](EVIDENCE-SPEC.md)。QA 签署 PASS 必须基于物理证据目录 `docs/evidence/` 中的 `manifest.json`：
+详见 [docs/EVIDENCE-SPEC.md](EVIDENCE-SPEC.md)。QA 签署 PASS 必须基于物理证据目录 `<独立 QA 证据目录>/` 中的 `manifest.json`：
 - **PROFILE-LIBRARY**：基础代码库，必须覆盖 A、C、D、H 类核心凭据（EVID-01, EVID-04, EVID-09 等）；
 - **PROFILE-API-DB**：服务与数据库切片，追加事务凭据与随机端口日志（EVID-02, EVID-05）；
-- **PROFILE-FULLSTACK**：全栈切片，追加端到端浏览器渲染与真实接口抓包（EVID-03）；
+- **PROFILE-FULLSTACK**：全栈切片，追加端到端浏览器渲染与真实接口抓包（EVID-21～24）；
 - **PROFILE-REWORK**：返工切片，强制追加红绿变异反证（EVID-25）。
 manifest 文件的每一项必须在磁盘上真实存在，且 SHA-256 严丝合缝。
 
@@ -223,7 +223,7 @@ manifest 文件的每一项必须在磁盘上真实存在，且 SHA-256 严丝�
 - `main` 主干开启 GitHub 分支保护规则：
   - 强制开启 `required_status_checks`（必须通过 `validate` 与 `validate-card`）；
   - 强制开启 `enforce_admins: true`；
-  - 强制启用 `require_code_owner_reviews: true`（保护治理路径归属）；
+  - 必须设置至少一名真实独立审查者，且 `required_approving_review_count >= 1`；仅启用 `require_code_owner_reviews` 且批准数为 0 不构成强制审查；
   - 禁用强制推送（`allow_force_pushes: false`）与分支删除（`allow_deletions: false`）。
 
 ### 7.4 人类极简终审 (One-page Sovereign Briefing)

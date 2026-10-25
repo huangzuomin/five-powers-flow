@@ -248,7 +248,7 @@ class TestTrustedEvaluator(unittest.TestCase):
             self.assertEqual(len(errs), 0)
 
             # Corrupting unit.log triggers item hash mismatch
-            (tmppath / "unit.log").write_text("tampered log", encoding="utf-8")
+            (tmppath / "EVID-01.log").write_text("tampered log", encoding="utf-8")
             errs_corrupt = coordinator.validate_qa_result(qa_card, dev_data=self.dev_card, repo_path=self.repo_path, evidence_dir=tmppath)
             self.assertTrue(any("Evidence SHA-256 mismatch" in e for e in errs_corrupt))
 

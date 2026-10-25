@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed (Audit round five — pending independent QA)
+- Reject placeholder evidence, self-attested test exemptions, unsigned authorship strings as proof, and unknown evidence profiles.
+- Added a shared protected-path policy and negative audit regression tests.
+- Introduced safer project onboarding and required-review design tasks; platform protection remains separately administered.
+
+
 ## [1.2.1] - 2026-10-25
 
 ### Added
@@ -17,30 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - QA `verdict: PASS` strictly requires all executed checks to have `exit_code: 0`.
   - QA `verdict: PASS` strictly requires a physical evidence directory (`--evidence-dir`).
   - Evidence Profile enforcement: `manifest.json` cannot have empty `items` and must provide all mandatory items for the declared Profile (`Library`, `API-DB`, `Full-Stack`, `Rework`).
-- **Fail-Closed State Machine & Merge Ancestry (P0-04)**: `compute_lifecycle_state` enforces that any DEV/QA errors prevent `MERGED_AND_CLOSED`, and `--pr-merged` requires verified git ancestry in main.
+- **Fail-Closed State Machine & Merge Ancestry (P0-04)**: `compute_lifecycle_state` enforces that any DEV/QA errors prevent `MERGED_AND_CLOSED`, and merge closure requires Git ancestry when repository evidence is supplied.
 - **Branch Protection Required Status Checks (P0-05, Issue #14)**: Configured GitHub `required_status_checks` on `main` branch enforcing `validate` and `validate-card` jobs with `enforce_admins: true` and `require_code_owner_reviews: true`.
-- **Hermetic Boundary Tests (P2-04)**: Expanded unit test suite from 6 to 15 tests covering exit codes, profile items, manifest emptiness, hermetic merge ancestry, and NOT_APPLICABLE status reasoning.
+- **Hermetic Boundary Tests (P2-04)**: Expanded boundary-test coverage (historical count; see CI for current count) covering exit codes, profile items, manifest emptiness, hermetic merge ancestry, and NOT_APPLICABLE status reasoning.
 
 ### Changed
 - **Package Tree Consolidation (Issue #22)**: Completely removed redundant `packages/fpf-coordinator` directory; unified canonical package under `packages.fpf_coordinator`; added CI duplicate module tree check.
 - **`not_run` Exemption Matrix (P2-01)**: Permitted empty `not_run` only when accompanied by explicit `not_run_exemption_justification` (min 15 chars) citing test matrix / scope proof.
-- **Pre-Handoff Gate 4 Scan Scope (P1-05)**: Changed secret scan from `HEAD~1...HEAD` to full branch diff `merge-base(base, HEAD)..HEAD`.
-- **Tone Calibration (P2-03)**: Replaced absolute claims of "不可篡改" with "高可信、防篡改校验与密码学存证机制", accurately reflecting the RFC reference status.
-
-### Added
-- **Dual-PR Workflow Routing (P0-01, P0-02)**: Dedicated CI workflow separation for `MAP_PR` vs `CODE_PR`. Code PRs are strictly rejected if missing `DEV_HANDOFF` card or touching governance files; Map PRs are anchored to merged Code commit ancestors (`code_merged_sha`).
-- **PR Head SHA Binding (P1-01)**: Server-side CI validates that `DEV_HANDOFF.tested_code_sha` strictly matches `github.event.pull_request.head.sha`.
-- **QA Fact-Based Verdict Enforcement (P0-03)**:
-  - QA `verdict: PASS` strictly requires all executed checks to have `exit_code: 0`.
-  - QA `verdict: PASS` strictly requires a physical evidence directory (`--evidence-dir`).
-  - Evidence Profile enforcement: `manifest.json` cannot have empty `items` and must provide all mandatory items for the declared Profile (`Library`, `API-DB`, `Full-Stack`, `Rework`).
-- **Fail-Closed State Machine & Merge Ancestry (P0-04)**: `compute_lifecycle_state` enforces that any DEV/QA errors prevent `MERGED_AND_CLOSED`, and `--pr-merged` requires verified git ancestry in main.
-- **Branch Protection Required Status Checks (P0-05)**: Configured GitHub `required_status_checks` on `main` branch enforcing `validate` job.
-- **Comprehensive Boundary Tests (P2-04)**: Expanded unit test suite from 6 to 12 tests covering exit codes, profile items, manifest emptiness, and merge ancestry.
-
-### Changed
-- **`not_run` Exemption Matrix (P2-01)**: Permitted empty `not_run` only when accompanied by explicit `not_run_exemption_justification` (min 15 chars) citing test matrix / scope proof.
-- **Canonical Package Unification (P2-02)**: Unified implementation into `packages/fpf_coordinator`, turning `packages/fpf-coordinator` into a backward-compatible wrapper.
 - **Pre-Handoff Gate 4 Scan Scope (P1-05)**: Changed secret scan from `HEAD~1...HEAD` to full branch diff `merge-base(base, HEAD)..HEAD`.
 - **Tone Calibration (P2-03)**: Replaced absolute claims of "不可篡改" with "高可信、防篡改校验与密码学存证机制", accurately reflecting the RFC reference status.
 

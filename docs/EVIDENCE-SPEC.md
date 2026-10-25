@@ -18,7 +18,7 @@
 | **`PROFILE-FULLSTACK`** | 包含前台交互、完整业务流 | **全量 32 项完整执行**，含真实浏览器截图 | 无 |
 | **`PROFILE-REWORK`** | 任何缺陷修复轮次 (Bug-Fix) | 根据模块选择上述之一，**强制追加 G(红绿变异反证)** | 视基础 Profile 而定 |
 
-*注：在任何 Profile 中免除的项，必须在 `manifest.json` 中明确声明为 `STATUS: NOT_APPLICABLE` 并附带架构合理性说明。*
+*注：强制证据不得以 `NOT_APPLICABLE` 代替；非强制证据可声明不适用，但不得计入 Profile 的已验证覆盖。*
 
 ---
 
@@ -66,9 +66,9 @@
 在 FPF 验证器中，主锚点不再是纸面文本，而是必须能被物理重算：
 ```bash
 python -m packages.fpf_coordinator.coordinator \
-  --dev-card docs/evidence/dev_handoff.yaml \
-  --qa-card docs/evidence/qa_result.yaml \
-  --evidence-dir docs/evidence \
+  --dev-card <真实路径>/dev_handoff.yaml \
+  --qa-card <真实路径>/qa_result.yaml \
+  --evidence-dir <真实 QA 证据目录> \
   --check-git
 ```
 若哈希不匹配或文件缺失，验证器将以退出码 1 阻断流程。
