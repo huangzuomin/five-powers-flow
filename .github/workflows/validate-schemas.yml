@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Also validate stacked feature PRs before their parent PR reaches main.
 
 jobs:
   validate:
@@ -48,4 +48,4 @@ jobs:
             echo "::error::Duplicate module directories (dash/underscore variants): $dup"
             exit 1
           fi
-          echo "Package structure verified clean: single canonical packages.fpf_coordinator"
+          echo "Package structure verified clean."
