@@ -31,12 +31,24 @@ jobs:
           ref: main
           path: trusted
           persist-credentials: false
-      - name: Checkout fixed candidate commit
+      - name: Checkout candidate repository history
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tested_sha }}
           path: candidate
-          persist-credentials: false
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Switch candidate to exact tested SHA
+        run: |
+          cd candidate
+          git fetch origin "+refs/heads/*:refs/remotes/origin/*" --prune || true
+          git fetch origin "+refs/pull/*/head:refs/remotes/origin/pull/*" || true
+          git checkout ${{ inputs.tested_sha }}
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          CURRENT_SHA=$(git rev-parse HEAD)
+          if [ "$CURRENT_SHA" != "${{ inputs.tested_sha }}" ]; then
+            echo "SHA mismatch: expected ${{ inputs.tested_sha }}, got $CURRENT_SHA"
+            exit 1
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
