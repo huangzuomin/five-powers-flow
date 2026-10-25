@@ -19,7 +19,13 @@ import sys
 
 HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
-from packages.fpf_policy.protected import is_protected
+try:
+    from packages.fpf_policy.protected import is_protected
+except ModuleNotFoundError:
+    # Direct script execution (python packages/fpf_gates/*.py) must work
+    # without the caller manually setting PYTHONPATH.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from packages.fpf_policy.protected import is_protected
 
 SENSITIVE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),               # AWS Access Key

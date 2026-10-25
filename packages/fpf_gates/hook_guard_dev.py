@@ -18,7 +18,13 @@ from pathlib import Path
 import re
 import sys
 
-from packages.fpf_policy.protected import is_protected_tool_path
+try:
+    from packages.fpf_policy.protected import is_protected_tool_path
+except ModuleNotFoundError:
+    # Direct script execution (python packages/fpf_gates/*.py) must work
+    # without the caller manually setting PYTHONPATH.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from packages.fpf_policy.protected import is_protected_tool_path
 
 # Block common write operations targeting protected paths. This is advisory:
 # service-side PR gates remain mandatory because shell syntax is unbounded.
