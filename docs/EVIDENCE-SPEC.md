@@ -72,3 +72,9 @@ python -m packages.fpf_coordinator.coordinator \
   --check-git
 ```
 若哈希不匹配或文件缺失，验证器将以退出码 1 阻断流程。
+
+## 四、真正的可信 QA 工作流（Audit round five）
+
+签署 PASS 所依赖的 `fpf-independent-qa.yml` 必须从受保护 main 检出验收脚本和已由独立审查人审核的 `.fpf/qa-plan.json`。每个必需 EVID 都要在该计划中配置真实命令 argv（EVID-31/32 由采集器从真实文件清单计算），在独立检出的目标 SHA 下执行，记录原始输出、退出码及文件 SHA。缺失配置即拒绝执行。
+
+修复轮次的 EVID-26 RED 测试必须出现预先声明的非零退出码；全栈 EVID-22 必须是真实 PNG。只有 GitHub Actions 产物与 QA Reviewer 的平台身份、审核 SHA 和 Artifact ID 一致，并经 Coordinator 验证 Manifest，才可认定是可信来源。此机制仍不等于人工审查可省略。详见 `docs/AUDIT-ROUND5.md`。

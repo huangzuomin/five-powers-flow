@@ -61,6 +61,34 @@ class TestTrustedQACollector(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"nonzero exit"):
             collect(self.plan,self.repo,self.out,"T001",self.sha,"Library")
 
+    def test_red_replay_requires_expected_nonzero_failure(self):
+        self.commands = {
+            k: ([sys.executable, "-c", "raise SystemExit(3)"] if k=="EVID-26"
+                else [sys.executable, "-c", "print('executed')"])
+            for k in REQUIRED_PROFILE_EVIDENCES["Rework"]
+            if k not in ("EVID-31","EVID-32")
+        }
+        self.plan.write_text(json.dumps({
+            "commands": self.commands,
+            "expected_exit_codes": {"EVID-26":3},
+        }),encoding="utf-8")
+        digest=collect(self.plan,self.repo,self.out,"T001",self.sha,"Rework")
+        self.assertFalse(verify_evidence_directory(self.out,digest,"Rework"))
+        self.assertIn('"exit_code": 3',(self.out/"EVID-26.log").read_text())
+
+    def test_red_replay_cannot_pass_with_zero_exit(self):
+        self.commands.update({
+            k: [sys.executable, "-c", "print('not red')"]
+            for k in REQUIRED_PROFILE_EVIDENCES["Rework"]
+        })
+        self.commands.pop("EVID-31",None)
+        self.commands.pop("EVID-32",None)
+        self.plan.write_text(json.dumps({
+            "commands":self.commands,"expected_exit_codes":{"EVID-26":3}
+        }),encoding="utf-8")
+        with self.assertRaisesRegex(ValueError,"trusted expected exit"):
+            collect(self.plan,self.repo,self.out,"T001",self.sha,"Rework")
+
     def test_wrong_head_rejected(self):
         with self.assertRaisesRegex(ValueError,"HEAD differs"):
             collect(self.plan,self.repo,self.out,"T001","f"*40,"Library")

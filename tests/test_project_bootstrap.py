@@ -70,6 +70,12 @@ class TestProjectBootstrap(unittest.TestCase):
         self.assertEqual(git(self.repo, "status", "--porcelain"), "")
         self.assertEqual(git(Path(state["paths"]["qa"]), "branch", "--show-current"), "")
         self.assertTrue((Path(state["paths"]["bootstrap"]) / ".fpf/agents.yaml").exists())
+        root=Path(state["paths"]["bootstrap"])
+        self.assertTrue((root / ".fpf/vendor/packages/fpf_policy/qa_artifact.py").exists())
+        self.assertTrue((root / ".fpf/vendor/packages/fpf_policy/qa_collector.py").exists())
+        self.assertTrue((root / ".github/workflows/fpf-independent-qa.yml").exists())
+        runner=(root / ".github/workflows/fpf-independent-qa.yml").read_text()
+        self.assertIn("trusted/.fpf/vendor",runner)
 
     def test_rerun_is_idempotent_and_preserves_artifacts(self):
         proposal = self.proposal()

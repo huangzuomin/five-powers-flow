@@ -42,7 +42,7 @@ jobs:
           python-version: "3.11"
       - name: Collect actual QA outputs from trusted plan
         env:
-          PYTHONPATH: ${{ github.workspace }}/trusted
+          PYTHONPATH: ${{ github.workspace }}/trusted:${{ github.workspace }}/trusted/.fpf/vendor
           FPF_SHA: ${{ inputs.tested_sha }}
           FPF_TASK: ${{ inputs.task_id }}
           FPF_PROFILE: ${{ inputs.profile }}
