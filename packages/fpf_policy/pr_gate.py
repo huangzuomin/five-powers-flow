@@ -179,9 +179,22 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
             raise ValueError("QA_RESULT and DEV_HANDOFF task_id mismatch")
         if str(qa.get("runner_sha")) == sha or str(qa.get("qa_contract_sha")) == sha:
             raise ValueError("QA toolchain must be pinned independently of PR tested code")
-        # A real artifact must be retrieved from a trusted QA run. This CI path
-        # deliberately refuses to call the local EVID simulator a signed QA pass.
-        raise ValueError("Independent QA artifact not yet attested: require trusted external QA runner")
+        from packages.fpf_policy.qa_artifact import independent_qa_evidence
+        repo_dir = Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
+        with independent_qa_evidence(
+            repo=os.environ["GITHUB_REPOSITORY"], qa=qa,
+            reviewer=reviewer, tested_sha=sha,
+            task_id=str(card["task_id"]),
+            token=os.environ.get("GH_TOKEN", ""),
+            repository_dir=repo_dir,
+        ) as evidence_dir:
+            qa_errors = coordinator.validate_qa_result(
+                qa, dev_data=card, repo_path=repo_dir,
+                evidence_dir=evidence_dir,
+            )
+            if qa_errors:
+                raise ValueError("QA_RESULT rejected: " + "; ".join(qa_errors))
+        return "CODE_PR: GitHub-authenticated independent review and artifact verified"
     if pr_type == "BOOTSTRAP_PR":
         if str(card.get("baseline_sha")).lower() != base:
             raise ValueError("BOOTSTRAP baseline != PR base SHA")

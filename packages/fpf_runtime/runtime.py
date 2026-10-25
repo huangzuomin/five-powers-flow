@@ -162,7 +162,8 @@ class SliceRuntime:
                         collected[eid] = candidates[0]
                     exported, verified_sha = export_fpf_manifest(
                         self.evidence_root / task_id / sha / "fpf",
-                        collected, task_id=task_id, profile=self.qa_profile)
+                        collected, task_id=task_id, profile=self.qa_profile,
+                        tested_sha=sha)
                     state["fpf_manifest_path"] = exported
                     state["fpf_manifest_sha256"] = verified_sha
 

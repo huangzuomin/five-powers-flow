@@ -15,7 +15,7 @@ from packages.fpf_coordinator.coordinator import (
 )
 
 def export_fpf_manifest(outside_dev: Path, files_by_evid: dict[str, Path],
-                        *, task_id: str, profile: str) -> tuple[str, str]:
+                        *, task_id: str, profile: str, tested_sha: str | None = None) -> tuple[str, str]:
     profile = normalize_profile(profile)
     root = outside_dev.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -40,6 +40,10 @@ def export_fpf_manifest(outside_dev: Path, files_by_evid: dict[str, Path],
                         "sha256": digest, "status": "PASS"})
     manifest = {"manifest_version": 1, "task_id": task_id,
                 "profile": profile, "items": entries}
+    if tested_sha is not None:
+        if not __import__("re").fullmatch(r"[0-9a-fA-F]{40}", tested_sha):
+            raise ValueError("Invalid tested SHA for evidence export")
+        manifest["tested_sha"] = tested_sha.lower()
     path = root / "manifest.json"
     if path.exists():
         raise ValueError("Refusing to overwrite existing manifest")
