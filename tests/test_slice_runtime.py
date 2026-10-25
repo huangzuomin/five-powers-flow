@@ -154,6 +154,28 @@ class TestSliceRuntime(unittest.TestCase):
         args_win = shlex.split(cmd_str, posix=False)
         self.assertIn(r"D:\foo\bar", args_win)
 
+    def test_qa_evidence_dir_export_manifest(self):
+        from packages.fpf_coordinator.coordinator import REQUIRED_PROFILE_EVIDENCES
+        ext_qa = Path(self.tmp.name) / "ext_qa"
+        class EvidenceCodex(FakeCodex):
+            def run(self, workspace, prompt, read_only=False):
+                res = super().run(workspace, prompt, read_only=read_only)
+                if read_only:
+                    head = git(workspace, "rev-parse", "HEAD")
+                    d = ext_qa / "SLICE_001" / head
+                    d.mkdir(parents=True, exist_ok=True)
+                    for eid in REQUIRED_PROFILE_EVIDENCES["Library"]:
+                        (d / f"{eid}.log").write_text("test evidence", encoding="utf-8")
+                return res
+        self.codex = EvidenceCodex()
+        check = [sys.executable, "-B", "-c", "assert True"]
+        rt = SliceRuntime(self.ledger, self.roles, self.codex, self.dev, self.qa,
+                          check, check, qa_evidence_dir=ext_qa, qa_profile="Library")
+        r = rt.run("SLICE_001")
+        self.assertEqual(r["phase"], "READY_FOR_OWNER_REVIEW")
+        self.assertTrue(r.get("fpf_manifest_sha256"))
+        self.assertTrue(Path(r["fpf_manifest_path"]).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
