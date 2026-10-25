@@ -52,7 +52,7 @@ class TestTrustRouting(unittest.TestCase):
             src=base/"src"
             src.mkdir()
             files={}
-            for eid in REQUIRED_PROFILE_EVIDENCES["Library"] - {"EVID-31", "EVID-32"}:
+            for eid in set(REQUIRED_PROFILE_EVIDENCES["Library"]) - {"EVID-31", "EVID-32"}:
                 f=src/(eid+".log")
                 f.write_text("Independently generated QA runner output for "+eid)
                 files[eid]=f
