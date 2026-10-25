@@ -40,6 +40,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install runner dependencies
+        run: python -m pip install jsonschema pyyaml
       - name: Collect actual QA outputs from trusted plan
         env:
           PYTHONPATH: ${{ github.workspace }}/trusted:${{ github.workspace }}/trusted/.fpf/vendor
