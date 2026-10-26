@@ -111,7 +111,7 @@ class CanonicalSnapshot:
                 not isinstance(x, str) or not x.strip() or x.startswith("/")
                 or ".." in x.replace("\\", "/").split("/") for x in self.allowed_paths):
             raise ValueError("Approved safe allowed_paths required")
-        if not (1 <= self.attempt <= self.max_attempts <= 10):
+        if not (1 <= self.max_attempts <= 10 and 1 <= self.attempt <= self.max_attempts + 1):
             raise ValueError("Invalid bounded attempt policy")
 
 

@@ -235,7 +235,7 @@ class RoleDispatchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"Expected PR"):
             from_github_records(issue,{"html_url":"https://github.com/org/repo/issues/62",
                 "head":{"sha":"b"*40}},baseline_sha="a"*40,project_id="DEMO01",
-                scope_authorized=True)
+                scope_grant=grant_for(issue))
 
     def test_never_authorize_merge_deploy_qa_signing(self):
         self.assertFalse(set(make_packet(state(),self.dev).allowed_actions) &
