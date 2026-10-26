@@ -65,3 +65,11 @@ send+visible reply remain NOT_RUN/BLOCKED until a real provider interface,
 registered targets, operator authorization, and physical smoke environment
 are present. Follow-up work must measure durable cursor, scheduler uptime,
 and full external EVID/QA chain before asserting unattended operation.
+
+## Follow-up after external FAIL review
+
+See [COORDINATION-DISPATCH.md](COORDINATION-DISPATCH.md) for the
+content-bound GitHub approval event, authenticated physical diff gates, QA
+FAIL validation, explicit provider lookup recovery, owner merge gate and
+bounded foreground runner. The provider-specific live smoke items remain
+NOT_RUN and do not inherit any certification from unit tests.
