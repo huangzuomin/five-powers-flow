@@ -198,6 +198,24 @@ class RoleDispatchTests(unittest.TestCase):
                            {"codex_thread":UnavailableTransport()})
         self.assertEqual(engine.dispatch_next(state())["phase"],"BLOCKED_RECONCILIATION")
 
+    def test_no_protected_governance_path_in_normal_dev_packet(self):
+        with self.assertRaisesRegex(ValueError,"Protected governance"):
+            make_packet(state(allowed_paths=("packages/fpf_coordinator/dispatch/core.py",)),self.dev)
+        with self.assertRaises(ValueError):
+            make_packet(state(allowed_paths=("../outside.py",)),self.dev)
+
+    def test_reject_same_repo_issue_url_when_pr_required(self):
+        text=("\x60\x60\x60yaml\norder_version: 1\nkind: WORK_ORDER\n"
+              "task_id: T001\nobjective: Test\nboundaries:\n"
+              "  allowed_paths: [src/module.py]\nacceptance_criteria: [Test]\n"
+              "target_branch: feat/demo\n\x60\x60\x60")
+        issue={"html_url":"https://github.com/org/repo/issues/61",
+               "updated_at":"2026-10-26T01:00:00Z","body":text}
+        with self.assertRaisesRegex(ValueError,"Expected PR"):
+            from_github_records(issue,{"html_url":"https://github.com/org/repo/issues/62",
+                "head":{"sha":"b"*40}},baseline_sha="a"*40,project_id="DEMO01",
+                scope_authorized=True)
+
     def test_never_authorize_merge_deploy_qa_signing(self):
         self.assertFalse(set(make_packet(state(),self.dev).allowed_actions) &
                          {"merge","deploy","publish","sign_qa"})

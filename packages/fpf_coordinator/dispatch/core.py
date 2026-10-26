@@ -11,6 +11,7 @@ import json
 import re
 from typing import Any
 from urllib.parse import urlsplit
+from packages.fpf_policy.protected import is_protected, normalize_repo_path
 
 SHA = re.compile(r"^[a-f0-9]{40}$")
 TASK = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
@@ -190,6 +191,11 @@ def make_packet(state: CanonicalSnapshot, target: Target) -> TaskPacket:
         raise ValueError("The trusted canonical state does not authorize this target/role")
     if target.project_id != state.project_id:
         raise ValueError("Target is registered for another project")
+    if target.role == "dev_lead":
+        for path in state.allowed_paths:
+            normalized = normalize_repo_path(path)
+            if is_protected(normalized):
+                raise ValueError("Protected governance path cannot be delegated to normal DEV; use GATE_PR")
     if target.role == "qa_lead" and not state.pr_head_sha:
         raise ValueError("QA requires a fixed candidate SHA")
     payload = "|".join((state.project_id, state.task_id, state.record_url,

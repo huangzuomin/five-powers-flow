@@ -64,9 +64,7 @@ def from_github_records(
     if pr is not None:
         pr_url = canonical_url(str(pr.get("html_url") or ""))
         if pr_url.split("/")[-2] != "pull" or pr_url.split("/")[3:5] != url.split("/")[3:5]:
-            # compare canonical GitHub repository (owner/repo), not PR number
-            if "/".join(pr_url.split("/")[3:5]) != "/".join(url.split("/")[3:5]):
-                raise ValueError("PR belongs to a different GitHub repository")
+            raise ValueError("Expected PR belonging to the same GitHub repository")
         pr_head = sha(str((pr.get("head") or {}).get("sha") or ""))
         dev = parse_card(str(pr.get("body") or ""), "DEV_HANDOFF")
         if dev is not None:
