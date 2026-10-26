@@ -86,6 +86,9 @@ def resolve_scope_grant(issue: dict, work: dict, *, comments: list[dict],
                 baseline_sha=sha(str(event.get("baseline_sha") or "")),
                 target_branch=str(event.get("target_branch") or ""),
                 max_attempts=event.get("max_attempts"))
+            if (not isinstance(grant.max_attempts,int) or isinstance(grant.max_attempts,bool)
+                    or not 1 <= grant.max_attempts <= 10):
+                raise ValueError("Grant attempt limit must be 1..10")
             if not re.fullmatch(r"[a-f0-9]{64}", grant.work_order_sha256):
                 raise ValueError("Malformed work order digest")
             selected = grant

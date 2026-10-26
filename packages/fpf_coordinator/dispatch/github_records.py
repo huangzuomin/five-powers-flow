@@ -165,6 +165,8 @@ def from_github_records(
             if not dev_valid or repo_path is None:
                 break
             verdict = candidate.get("verdict")
+            if not isinstance(candidate.get("findings"), dict) or "next_action" not in candidate:
+                break
             review_state = str(review.get("state") or "").upper()
             # FAIL also requires a complete QA_RESULT and actual independent
             # test artifact. A 4-field CHANGES_REQUESTED is NOT enough.
@@ -190,4 +192,5 @@ def from_github_records(
         has_work_order=True, dev_card=dev, dev_validated=dev_valid,
         qa_card=qa, qa_authenticated=qa_authenticated,
         pr_merge_authenticated=merged, attempt=attempt,
-        max_attempts=scope_grant.max_attempts if grant_ok else 1)
+        max_attempts=scope_grant.max_attempts if grant_ok else 1,
+        scope_grant_id=scope_grant.comment_id if grant_ok else 0)

@@ -1,6 +1,7 @@
 """Issue #61 regression suite. Fake drivers are NOT live QA evidence."""
 import hashlib
 import json
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 import subprocess
@@ -13,7 +14,27 @@ from packages.fpf_coordinator.dispatch.controller import Coordinator
 from packages.fpf_coordinator.dispatch.journal import DispatchJournal
 from packages.fpf_coordinator.dispatch.transports import (
     CodexThreadBridge, ChatGPTWebTransport, Receipt, Observation, UnavailableTransport)
-from packages.fpf_coordinator.dispatch.github_records import from_github_records
+from packages.fpf_coordinator.dispatch.github_records import from_github_records, parse_card
+from packages.fpf_coordinator.dispatch.scope_grant import ScopeGrant, resolve_scope_grant
+
+
+
+def grant_for(issue, baseline="a"*40, project="DEMO01", max_attempts=2):
+    work=parse_card(issue["body"],"WORK_ORDER")
+    return ScopeGrant(1,"project-owner",work["task_id"],project,
+        issue["html_url"],hashlib.sha256(issue["body"].encode("utf-8")).hexdigest(),
+        issue["updated_at"],baseline,work["target_branch"],max_attempts)
+
+
+def comment_for(issue,baseline="a"*40):
+    grant=grant_for(issue,baseline)
+    payload={"kind":"FPF_SCOPE_GRANT","grant_version":1,
+             "task_id":grant.task_id,"project_id":grant.project_id,
+             "issue_url":grant.issue_url,"work_order_sha256":grant.work_order_sha256,
+             "issue_revision":grant.issue_revision,"baseline_sha":grant.baseline_sha,
+             "target_branch":grant.target_branch,"max_attempts":grant.max_attempts}
+    return {"id":123,"user":{"login":"project-owner"},
+            "body":"\x60\x60\x60yaml\n"+yaml.safe_dump(payload)+"\x60\x60\x60"}
 
 
 class Driver:
@@ -146,7 +167,7 @@ class RoleDispatchTests(unittest.TestCase):
                       pr_head_sha="b"*40,qa_authenticated=True,
                       qa_card={"tested_sha":"b"*40,"verdict":"FAIL"})
         self.assertEqual(next_action(current).role,"dev_lead")
-        self.assertEqual(next_action(replace(current,attempt=2)).phase,"BLOCKED")
+        self.assertEqual(next_action(replace(current,attempt=3)).phase,"BLOCKED")
 
     def test_unknown_provider_observation_never_means_failure(self):
         req=self.engine.dispatch_next(state())["request_id"]
@@ -237,7 +258,7 @@ class RoleDispatchTests(unittest.TestCase):
         issue={"html_url":"https://github.com/org/repo/issues/61",
                "updated_at":"2026-10-26T01:00:00Z","body":body}
         observed=from_github_records(issue,None,baseline_sha="a"*40,
-                                     project_id="DEMO01",scope_authorized=True)
+                                     project_id="DEMO01",scope_grant=grant_for(issue))
         self.assertEqual(next_action(observed).role,"dev_lead")
         self.assertFalse(observed.qa_authenticated)
 
@@ -252,13 +273,15 @@ class RoleDispatchTests(unittest.TestCase):
         issue={"html_url":"https://github.com/org/repo/issues/61",
                "user":{"login":"project-owner"},"body":work,
                "updated_at":"2026-10-26T15:00:00Z"}
-        with patch.object(reader,"_api",return_value=issue):
+        def api(endpoint):
+            return [comment_for(issue)] if "comments" in endpoint else issue
+        with patch.object(reader,"_api",side_effect=api):
             self.assertEqual(next_action(reader.snapshot(issue_number=61,pr_number=None,
                 project_id="DEMO01",baseline_sha="a"*40,approved_owner_login="project-owner",
                 repo_path=None)).role,"dev_lead")
-            with self.assertRaisesRegex(ValueError,"authorized project owner"):
-                reader.snapshot(issue_number=61,pr_number=None,project_id="DEMO01",
-                   baseline_sha="a"*40,approved_owner_login="unknown",repo_path=None)
+            self.assertEqual(next_action(reader.snapshot(issue_number=61,pr_number=None,
+                project_id="DEMO01",baseline_sha="a"*40,approved_owner_login="unknown",
+                repo_path=None)).phase,"HUMAN_GATE_SCOPE")
         with patch.object(reader,"_api",side_effect=[[{"id":k} for k in range(100)],[{"id":100}]]):
             self.assertEqual(len(reader.reviews(88)),101)
 
@@ -301,10 +324,11 @@ class RoleDispatchTests(unittest.TestCase):
                  "dev_checks":[{"command":"python tests","exit_code":0}],
                  "not_run":["API integration not run"]}
             # JSON is a YAML subset.
-            pr={"html_url":dev["pr_url"],"head":{"sha":head},"user":{"login":"developer"},
+            pr={"html_url":dev["pr_url"],"head":{"sha":head,"ref":"feat/x"},
+                "base":{"sha":base,"ref":"main"},"user":{"login":"developer"},
                 "body":"\x60\x60\x60yaml\n"+yaml.safe_dump(dev)+"\n\x60\x60\x60"}
             observed=from_github_records(issue,pr,baseline_sha=base,
-                               project_id="DEMO01",repo_path=repo,scope_authorized=True)
+                               project_id="DEMO01",repo_path=repo,scope_grant=grant_for(issue,base))
             self.assertTrue(observed.dev_validated)
             self.assertEqual(next_action(observed).role,"qa_lead")
             bad_qa={"kind":"QA_RESULT","task_id":"T001","tested_sha":head,
@@ -313,17 +337,17 @@ class RoleDispatchTests(unittest.TestCase):
                       "user":{"login":"qa-reviewer"},
                       "body":"\x60\x60\x60yaml\n"+yaml.safe_dump(bad_qa)+"\x60\x60\x60"}]
             fail=from_github_records(issue,pr,baseline_sha=base,
-                project_id="DEMO01",repo_path=repo,scope_authorized=True,reviews=reviews)
-            self.assertEqual(next_action(fail).role,"dev_lead")
+                project_id="DEMO01",repo_path=repo,scope_grant=grant_for(issue,base),reviews=reviews)
+            self.assertEqual(next_action(fail).phase,"BLOCKED")
             good_qa={**bad_qa,"verdict":"PASS"}
             passed=[{**reviews[0],"state":"APPROVED",
                      "body":"\x60\x60\x60yaml\n"+yaml.safe_dump(good_qa)+"\x60\x60\x60"}]
             unproven=from_github_records(issue,pr,baseline_sha=base,
-                project_id="DEMO01",repo_path=repo,scope_authorized=True,reviews=passed)
+                project_id="DEMO01",repo_path=repo,scope_grant=grant_for(issue,base),reviews=passed)
             self.assertEqual(next_action(unproven).phase,"BLOCKED")
             wrong=from_github_records(issue,{**pr,"user":{"login":"wrong"}},
                                baseline_sha=base,project_id="DEMO01",
-                               repo_path=repo,scope_authorized=True)
+                               repo_path=repo,scope_grant=grant_for(issue,base))
             self.assertEqual(next_action(wrong).phase,"BLOCKED")
 
 
