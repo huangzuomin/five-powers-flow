@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import yaml
 
 from packages.fpf_coordination.core import CanonicalSnapshot, Target, make_packet, next_action
 from packages.fpf_coordination.controller import Coordinator
@@ -231,7 +232,7 @@ class RoleDispatchTests(unittest.TestCase):
                  "not_run":["API integration not run"]}
             # JSON is a YAML subset.
             pr={"html_url":dev["pr_url"],"head":{"sha":head},"user":{"login":"developer"},
-                "body":"\x60\x60\x60yaml\n"+json.dumps(dev)+"\n\x60\x60\x60"}
+                "body":"\x60\x60\x60yaml\n"+yaml.safe_dump(dev)+"\n\x60\x60\x60"}
             observed=from_github_records(issue,pr,baseline_sha=base,
                                project_id="DEMO01",repo_path=repo,scope_authorized=True)
             self.assertTrue(observed.dev_validated)

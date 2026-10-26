@@ -17,7 +17,7 @@ EXACT = frozenset({
 PREFIXES = (".github/", ".fpf/", "schemas/",
             "packages/fpf_policy/", "packages/fpf_coordinator/",
             "packages/fpf_gates/", "packages/fpf_bootstrap/",
-            "packages/fpf_runtime/")
+            "packages/fpf_runtime/", "packages/fpf_coordination/")
 
 def normalize_repo_path(path: str) -> str:
     path = str(path).replace("\\", "/").strip().lower()

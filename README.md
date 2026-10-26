@@ -150,6 +150,7 @@ python -m packages.fpf_coordinator.coordinator --dev-card dev_handoff.yaml --qa-
 
 - `packages/fpf_bootstrap/`：项目初始化规划、初始项目地图、工作区创建与 doctor。
 - `packages/fpf_runtime/`：单切片 DEV/QA 执行、重试、状态与本地证据。
+- `packages/fpf_coordination/`：Issue #61 的实验性角色派发内核，提供身份绑定、幂等发送、持久化回执与故障恢复。**尚未连接可写 Codex/ChatGPT UI 线程，也不提供无人值守正式 QA 判定。**
 - `packages/fpf_coordinator/`：卡片、Git、证据与生命周期验证器。
 - `packages/fpf_gates/`：本地前置检查；`packages/fpf_policy/`：共享保护路径。
 - `schemas/`：交接与证据契约；`tests/`：离线边界与集成模拟测试。
