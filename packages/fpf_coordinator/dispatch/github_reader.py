@@ -1,16 +1,13 @@
-"""Read-only canonical GitHub records through an operator-installed gh CLI.
-
-No git push/merge, role dispatch, hidden credentials, or user browser actions.
-The client reads REST records only; authorization is a separate explicit
-operator-owned allowlist, not an Issue body/self-signed field.
-"""
+"""Read-only GitHub observer with explicit current owner scope-grant events."""
 from __future__ import annotations
 import json
 from pathlib import Path
 import re
 import subprocess
 from typing import Callable, Any
-from .github_records import from_github_records
+from .github_records import from_github_records, parse_card
+from .scope_grant import resolve_scope_grant
+from .journal import DispatchJournal
 
 SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -48,37 +45,53 @@ class GitHubReadOnlySource:
             raise ValueError("Expected GitHub PR payload")
         return result
 
-    def reviews(self, number: int) -> list[dict]:
-        if not isinstance(number,int) or number <= 0:
-            raise ValueError("Invalid PR number")
+    def _paged(self, endpoint: str) -> list[dict]:
         out = []
         for page in range(1,101):
-            values = self._api("pulls/%d/reviews?per_page=100&page=%d" % (number,page))
+            values = self._api("%s?per_page=100&page=%d" % (endpoint,page))
             if not isinstance(values,list) or len(values)>100:
-                raise ValueError("Invalid GitHub review page")
+                raise ValueError("Invalid GitHub API page")
             out.extend(values)
             if len(values)<100:
                 return out
-        raise ValueError("Review pagination exceeded 10000 records; fail closed")
+        raise ValueError("GitHub pagination exceeded 10000 entries; fail closed")
+
+    def reviews(self, number: int) -> list[dict]:
+        if not isinstance(number,int) or number <= 0:
+            raise ValueError("Invalid PR number")
+        return self._paged("pulls/%d/reviews" % number)
+
+    def comments(self, number: int) -> list[dict]:
+        if not isinstance(number,int) or number <= 0:
+            raise ValueError("Invalid Issue number")
+        return self._paged("issues/%d/comments" % number)
 
     def snapshot(self, *, issue_number: int, pr_number: int | None,
                  project_id: str, baseline_sha: str, approved_owner_login: str,
-                 repo_path: Path | None,
+                 repo_path: Path | None, journal: DispatchJournal | None = None,
+                 evidence_dir: Path | None = None,
                  authenticate_qa_pass: Callable[[dict,dict,list[dict]], bool] | None = None,
-                 attempt: int = 1, max_attempts: int = 3):
+                 authenticate_qa_failure: Callable[[dict,dict,list[dict]], bool] | None = None):
         issue = self.issue(issue_number)
-        owner = str((issue.get("user") or {}).get("login") or "")
-        if not approved_owner_login or owner.casefold() != approved_owner_login.casefold():
-            # No self-asserted scope approval in untrusted WORK_ORDER YAML.
-            raise ValueError("Issue creator is not an explicitly authorized project owner")
+        work = parse_card(str(issue.get("body") or ""), "WORK_ORDER")
+        if work is None:
+            raise ValueError("Canonical Issue lacks WORK_ORDER")
+        grant = resolve_scope_grant(
+            issue, work, comments=self.comments(issue_number),
+            authorized_actor=approved_owner_login,project_id=project_id,
+            baseline_sha=baseline_sha)
         pr = self.pull(pr_number) if pr_number is not None else None
         reviews = self.reviews(pr_number) if pr_number is not None else []
         snapshot = from_github_records(
             issue, pr, baseline_sha=baseline_sha,project_id=project_id,
-            scope_authorized=True,reviews=reviews,repo_path=repo_path,
-            authenticate_qa_pass=authenticate_qa_pass,
-            attempt=attempt,max_attempts=max_attempts)
+            scope_grant=grant,reviews=reviews,repo_path=repo_path,
+            evidence_dir=evidence_dir,authenticate_qa_pass=authenticate_qa_pass,
+            authenticate_qa_failure=authenticate_qa_failure)
         expected_issue="https://github.com/"+self.repository+"/issues/"+str(issue_number)
         if snapshot.record_url != expected_issue:
             raise ValueError("GitHub Issue is not in configured repository")
+        if journal is not None and snapshot.scope_authorized:
+            from dataclasses import replace
+            attempt = journal.canonical_attempt(snapshot)
+            snapshot = replace(snapshot,attempt=attempt)
         return snapshot

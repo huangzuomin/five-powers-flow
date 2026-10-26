@@ -75,7 +75,49 @@ class DispatchJournal:
         columns={row[1] for row in self.db.execute("PRAGMA table_info(dispatches)")}
         if "next_poll_at" not in columns:
             self.db.execute("ALTER TABLE dispatches ADD COLUMN next_poll_at REAL NOT NULL DEFAULT 0")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS task_policies (
+            task_id TEXT PRIMARY KEY, policy_json TEXT NOT NULL)""")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS reworks (
+            task_id TEXT NOT NULL, failed_sha TEXT NOT NULL,
+            next_attempt INTEGER NOT NULL, PRIMARY KEY(task_id,failed_sha))""")
         self.db.commit()
+
+    def policy_guard(self, snapshot) -> None:
+        """Freeze authorized scope and retry limits across process restarts."""
+        policy=json.dumps({"project_id":snapshot.project_id,
+            "baseline_sha":snapshot.baseline_sha,"max_attempts":snapshot.max_attempts,
+            "scope":snapshot.scope,"allowed_paths":snapshot.allowed_paths,
+            "acceptance":snapshot.acceptance,"scope_grant_id":snapshot.scope_grant_id},
+            sort_keys=True)
+        old=self.db.execute("SELECT policy_json FROM task_policies WHERE task_id=?",
+                            (snapshot.task_id,)).fetchone()
+        if old and old[0] != policy:
+            raise ValueError("Canonical task authorization/limits changed; new task required")
+        if not old:
+            with self.db:
+                self.db.execute("INSERT INTO task_policies VALUES (?,?)",(snapshot.task_id,policy))
+
+    def canonical_attempt(self, snapshot) -> int:
+        """Calculate attempt from durable DEV history and verified QA FAIL."""
+        self.policy_guard(snapshot)
+        row=self.db.execute("SELECT COALESCE(MAX(attempt),0) FROM dispatches "
+                            "WHERE task_id=? AND role='dev_lead'",
+                            (snapshot.task_id,)).fetchone()
+        prior=int(row[0])
+        if snapshot.qa_authenticated and snapshot.qa_card and snapshot.qa_card.get("verdict") == "FAIL":
+            failed_sha=snapshot.pr_head_sha
+            existing=self.db.execute("SELECT next_attempt FROM reworks WHERE task_id=? AND failed_sha=?",
+                                     (snapshot.task_id,failed_sha)).fetchone()
+            if existing:
+                return int(existing[0])
+            nxt=max(prior,1)+1
+            if nxt > snapshot.max_attempts:
+                return nxt
+            with self.db:
+                self.db.execute("INSERT INTO reworks VALUES (?,?,?)",
+                                (snapshot.task_id,failed_sha,nxt))
+            return nxt
+        return max(prior,1)
 
     def close(self):
         self.db.close()

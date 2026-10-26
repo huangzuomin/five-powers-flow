@@ -35,6 +35,12 @@ class Coordinator:
         if transport is None:
             return {"phase":"BLOCKED", "reason":"No authorized transport driver", "request_id":None}
         with instance_lock(self.journal.path):
+            self.journal.policy_guard(snapshot)
+            attempt=self.journal.canonical_attempt(snapshot)
+            if attempt != snapshot.attempt:
+                return {"phase":"BLOCKED_RECONCILIATION",
+                        "reason":"Untrusted attempt counter does not match durable journal",
+                        "request_id":None}
             existing = self.journal.create(packet,target)
             if existing["phase"] == "SENDING":
                 return self.journal.set_phase(packet.request_id,"BLOCKED_RECONCILIATION",
@@ -122,3 +128,36 @@ class Coordinator:
                                               reason="Cancellation not confirmed")
             return self.journal.set_phase(request_id,"TRANSPORT_CANCELLED",observation=observation,
                                           reason="Provider acknowledged cancellation")
+
+    def reconcile(self, request_id: str) -> dict:
+        """Safely resume from a provider lookup. Never sends twice."""
+        with instance_lock(self.journal.path):
+            state=self.journal.row(request_id)
+            if not state:
+                raise ValueError("Unknown dispatch request")
+            if state["phase"] not in ("SENDING","BLOCKED_RECONCILIATION"):
+                return state
+            target=Target(**json.loads(state["target"]))
+            adapter=self.transports.get(target.transport)
+            if adapter is None:
+                return self.journal.set_phase(request_id,"BLOCKED_RECONCILIATION",
+                                              reason="No provider available for lookup")
+            if state["receipt"]:
+                receipt=Receipt(**json.loads(state["receipt"]))
+            else:
+                lookup=getattr(adapter,"lookup_by_request",None)
+                if not callable(lookup):
+                    return self.journal.set_phase(request_id,"BLOCKED_RECONCILIATION",
+                                                 reason="Provider cannot look up request ID")
+                try:
+                    receipt=lookup(target,request_id)
+                except Exception as exc:
+                    return self.journal.set_phase(request_id,"BLOCKED_RECONCILIATION",
+                                                 reason="Provider lookup inconclusive: "+str(exc)[:200])
+            if (not isinstance(receipt,Receipt) or receipt.request_id != request_id or
+                    receipt.target_identity != target.identity):
+                return self.journal.set_phase(request_id,"BLOCKED_RECONCILIATION",
+                                             reason="No verified provider receipt for request")
+            return self.journal.set_phase(request_id,"ACKNOWLEDGED",receipt=receipt,
+                                          next_poll_at=self.clock(),
+                                          reason="Recovered provider receipt; task not complete")

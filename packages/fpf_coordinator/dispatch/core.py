@@ -94,6 +94,7 @@ class CanonicalSnapshot:
     pr_merge_authenticated: bool = False
     attempt: int = 1
     max_attempts: int = 3
+    scope_grant_id: int = 0
 
     def __post_init__(self) -> None:
         if not TASK.fullmatch(self.task_id) or not TASK.fullmatch(self.project_id):
@@ -146,7 +147,7 @@ def next_action(state: CanonicalSnapshot) -> Decision:
         return Decision("BLOCKED", None, "Stale QA SHA vs PR head")
     verdict = state.qa_card.get("verdict")
     if verdict == "FAIL":
-        if state.attempt >= state.max_attempts:
+        if state.attempt > state.max_attempts:
             return Decision("BLOCKED", None, "QA rework attempt limit")
         return Decision("DISPATCH", "dev_lead", "Authenticated QA failure; bounded DEV rework")
     if verdict == "PASS":
