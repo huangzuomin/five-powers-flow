@@ -81,6 +81,20 @@ class CodexThreadBridge:
                        str(record.get("turn_id") or ""),
                        str(record.get("message_id") or ""))
 
+    def lookup_by_request(self, target: Target, request_id: str) -> Receipt | None:
+        """Only a provider-supported unique lookup can recover an unknown send."""
+        lookup = getattr(self.driver, "thread_lookup_by_request", None)
+        if not callable(lookup):
+            return None
+        result = lookup(thread_id=target.identity, workspace=target.workspace,
+                        request_id=request_id)
+        if not isinstance(result, dict):
+            return None
+        if result.get("thread_id") != target.identity or result.get("request_id") != request_id:
+            return None
+        return Receipt(request_id,target.identity,
+                       str(result.get("turn_id") or ""),str(result.get("message_id") or ""))
+
     def read_status(self, target: Target, receipt: Receipt) -> Observation:
         if target.identity != receipt.target_identity:
             raise ValueError("Codex receipt target drift")
@@ -125,6 +139,16 @@ class ChatGPTWebTransport:
         return Receipt(packet.request_id, target.identity,
                        str(msg.get("turn_id") or ""),
                        str(msg.get("message_id") or ""))
+
+    def lookup_by_request(self, target: Target, request_id: str) -> Receipt | None:
+        lookup=getattr(self.driver,"message_lookup_by_request",None)
+        if not callable(lookup):
+            return None
+        result=lookup(conversation_url=target.identity,request_id=request_id)
+        if not isinstance(result,dict) or result.get("conversation_url") != target.identity or result.get("request_id") != request_id or result.get("message_visible") is not True:
+            return None
+        return Receipt(request_id,target.identity,
+                       str(result.get("turn_id") or ""),str(result.get("message_id") or ""))
 
     def read_status(self, target: Target, receipt: Receipt) -> Observation:
         if target.identity != receipt.target_identity:
