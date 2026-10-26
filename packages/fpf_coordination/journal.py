@@ -65,12 +65,16 @@ class DispatchJournal:
             target TEXT NOT NULL, packet TEXT NOT NULL,
             phase TEXT NOT NULL, receipt TEXT, observation TEXT,
             poll_count INTEGER NOT NULL DEFAULT 0,
+            next_poll_at REAL NOT NULL DEFAULT 0,
             updated TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
             UNIQUE(task_id,role,attempt))""")
         self.db.execute("""CREATE TABLE IF NOT EXISTS dispatch_events (
             seq INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL,
             at TEXT NOT NULL, phase TEXT NOT NULL, digest TEXT NOT NULL,
             details TEXT NOT NULL)""")
+        columns={row[1] for row in self.db.execute("PRAGMA table_info(dispatches)")}
+        if "next_poll_at" not in columns:
+            self.db.execute("ALTER TABLE dispatches ADD COLUMN next_poll_at REAL NOT NULL DEFAULT 0")
         self.db.commit()
 
     def close(self):
@@ -114,19 +118,21 @@ class DispatchJournal:
 
     def set_phase(self, request_id: str, phase: str, *, receipt: Receipt | None = None,
                   observation: Observation | None = None, reason: str = "",
-                  increment_poll: bool = False) -> dict:
+                  increment_poll: bool = False,
+                  next_poll_at: float | None = None) -> dict:
         current = self.row(request_id)
         if not current:
             raise ValueError("Dispatch request not registered")
         with self.db:
             self.db.execute("""UPDATE dispatches SET phase=?,receipt=?,observation=?,
-                            poll_count=?,updated=?,reason=? WHERE request_id=?""",
+                            poll_count=?,next_poll_at=?,updated=?,reason=? WHERE request_id=?""",
                             (phase,
                              json.dumps(vars(receipt),sort_keys=True) if receipt
                                 else current["receipt"],
                              json.dumps(vars(observation),sort_keys=True) if observation
                                 else current["observation"],
                              current["poll_count"] + int(increment_poll),
+                             current["next_poll_at"] if next_poll_at is None else next_poll_at,
                              utcnow(),reason[:500],request_id))
             self._event(request_id,phase,reason)
         return self.row(request_id)

@@ -67,8 +67,10 @@ class RoleDispatchTests(unittest.TestCase):
         self.qa=Target("DEMO01","qa_lead","codex_thread","codex-thread-qa01",
                        "C:/FPF/qa",approved=True)
         self.driver=Driver()
+        self.now=[1000.0]
         self.engine=Coordinator(self.ledger,{"dev_lead":self.dev,"qa_lead":self.qa},
-                                {"codex_thread":CodexThreadBridge(self.driver)},max_polls=3)
+                                {"codex_thread":CodexThreadBridge(self.driver)},max_polls=3,
+                                poll_base_seconds=5,clock=lambda:self.now[0])
 
     def tearDown(self):
         self.ledger.close()
@@ -86,8 +88,10 @@ class RoleDispatchTests(unittest.TestCase):
         req=self.engine.dispatch_next(state())["request_id"]
         self.assertEqual(self.engine.observe(req)["phase"],"ACKNOWLEDGED")
         self.driver.state="running"
+        self.now[0]+=5
         self.assertEqual(self.engine.observe(req)["phase"],"RUNNING")
         self.driver.state="completed"
+        self.now[0]+=10
         self.assertEqual(self.engine.observe(req)["phase"],"TRANSPORT_COMPLETED_UNVERIFIED")
 
     def test_restart_during_sending_never_resends(self):
@@ -149,10 +153,26 @@ class RoleDispatchTests(unittest.TestCase):
         self.driver.state="unknown"
         self.assertEqual(self.engine.observe(req)["phase"],"BLOCKED_RECONCILIATION")
 
+    def test_persisted_poll_backoff_survives_restart(self):
+        req=self.engine.dispatch_next(state())["request_id"]
+        self.engine.observe(req)
+        self.assertEqual(self.ledger.row(req)["next_poll_at"],1005.0)
+        self.assertEqual(self.engine.observe(req)["poll_count"],1)
+        self.ledger.close()
+        self.ledger=DispatchJournal(self.path)
+        engine=Coordinator(self.ledger,{"dev_lead":self.dev},
+                           {"codex_thread":CodexThreadBridge(self.driver)},max_polls=3,
+                           poll_base_seconds=5,clock=lambda:self.now[0])
+        self.assertEqual(engine.observe(req)["poll_count"],1)
+        self.now[0]+=5
+        self.assertEqual(engine.observe(req)["poll_count"],2)
+        self.assertEqual(self.ledger.row(req)["next_poll_at"],1015.0)
+
     def test_bounded_observation_poll_count(self):
         req=self.engine.dispatch_next(state())["request_id"]
         for _ in range(3):
             self.engine.observe(req)
+            self.now[0]+=30
         self.assertEqual(self.engine.observe(req)["phase"],"BLOCKED_RECONCILIATION")
 
     def test_wrong_project_and_unknown_transport_rejected(self):

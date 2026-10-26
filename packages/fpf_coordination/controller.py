@@ -1,6 +1,8 @@
 """A single safe coordination tick and explicit resume/poll operations."""
 from __future__ import annotations
 import json
+import time
+from typing import Callable
 from pathlib import Path
 from .core import CanonicalSnapshot, Target, Decision, make_packet, next_action
 from .journal import DispatchJournal, instance_lock
@@ -9,11 +11,17 @@ from .transports import Receipt, RoleTransport
 
 class Coordinator:
     def __init__(self, journal: DispatchJournal, registry: dict[str, Target],
-                 transports: dict[str, RoleTransport], max_polls: int = 8):
+                 transports: dict[str, RoleTransport], max_polls: int = 8,
+                 poll_base_seconds: float = 5.0,
+                 clock: Callable[[], float] | None = None):
         if not 1 <= max_polls <= 100:
             raise ValueError("Invalid observation limit")
         self.journal, self.registry, self.transports = journal, dict(registry), dict(transports)
+        if not 0 < poll_base_seconds <= 300:
+            raise ValueError("Positive bounded poll interval required")
         self.max_polls = max_polls
+        self.poll_base_seconds = poll_base_seconds
+        self.clock = clock or time.time
 
     def dispatch_next(self, snapshot: CanonicalSnapshot) -> dict:
         decision = next_action(snapshot)
@@ -45,7 +53,8 @@ class Coordinator:
                 return self.journal.set_phase(packet.request_id,"BLOCKED_RECONCILIATION",
                     reason="Uncertain dispatch outcome: "+str(exc)[:350])
             return self.journal.set_phase(packet.request_id,"ACKNOWLEDGED",
-                    receipt=receipt,reason="Provider receipt observed; task NOT complete")
+                    receipt=receipt,reason="Provider receipt observed; task NOT complete",
+                    next_poll_at=self.clock())
 
     def observe(self, request_id: str) -> dict:
         with instance_lock(self.journal.path):
@@ -57,6 +66,8 @@ class Coordinator:
                                      reason="Restart after unconfirmed send")
             if state["phase"] not in ("ACKNOWLEDGED","RUNNING"):
                 return state
+            if state["next_poll_at"] > self.clock():
+                return state  # Persisted backoff prevents premature remote calls.
             if state["poll_count"] >= self.max_polls:
                 return self.journal.set_phase(request_id,"BLOCKED_RECONCILIATION",
                                      reason="Observation limit reached; do not assume failure")
@@ -81,6 +92,9 @@ class Coordinator:
             }[observation.state]
             return self.journal.set_phase(
                 request_id,phase,observation=observation,increment_poll=True,
+                next_poll_at=(self.clock() + min(300.0, self.poll_base_seconds *
+                          (2 ** state["poll_count"])) if phase in ("ACKNOWLEDGED","RUNNING")
+                          else 0.0),
                 reason="Transport state only; re-read canonical GitHub validation")
 
     def cancel(self, request_id: str) -> dict:
