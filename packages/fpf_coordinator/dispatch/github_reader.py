@@ -72,6 +72,14 @@ class GitHubReadOnlySource:
                  evidence_dir: Path | None = None,
                  authenticate_qa_pass: Callable[[dict,dict,list[dict]], bool] | None = None,
                  authenticate_qa_failure: Callable[[dict,dict,list[dict]], bool] | None = None):
+        # A fixed login alone is not current authorization. Check server-side
+        # collaborator permission on every observation; permission loss revokes.
+        if not approved_owner_login or not re.fullmatch(r"[A-Za-z0-9_-]{1,39}",approved_owner_login):
+            raise ValueError("Invalid authorized owner identity")
+        membership=self._api("collaborators/"+approved_owner_login+"/permission")
+        if (not isinstance(membership,dict) or
+                membership.get("permission") not in ("admin","maintain","write")):
+            raise ValueError("Configured owner no longer has current GitHub write permission")
         issue = self.issue(issue_number)
         work = parse_card(str(issue.get("body") or ""), "WORK_ORDER")
         if work is None:

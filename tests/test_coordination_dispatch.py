@@ -274,6 +274,8 @@ class RoleDispatchTests(unittest.TestCase):
                "user":{"login":"project-owner"},"body":work,
                "updated_at":"2026-10-26T15:00:00Z"}
         def api(endpoint):
+            if endpoint.startswith("collaborators/"):
+                return {"permission":"write"}
             return [comment_for(issue)] if "comments" in endpoint else issue
         with patch.object(reader,"_api",side_effect=api):
             self.assertEqual(next_action(reader.snapshot(issue_number=61,pr_number=None,
@@ -282,6 +284,12 @@ class RoleDispatchTests(unittest.TestCase):
             self.assertEqual(next_action(reader.snapshot(issue_number=61,pr_number=None,
                 project_id="DEMO01",baseline_sha="a"*40,approved_owner_login="unknown",
                 repo_path=None)).phase,"HUMAN_GATE_SCOPE")
+        def removed(endpoint):
+            return {"permission":"read"} if endpoint.startswith("collaborators/") else api(endpoint)
+        with patch.object(reader,"_api",side_effect=removed):
+            with self.assertRaisesRegex(ValueError,"current GitHub write permission"):
+                reader.snapshot(issue_number=61,pr_number=None,project_id="DEMO01",
+                  baseline_sha="a"*40,approved_owner_login="project-owner",repo_path=None)
         with patch.object(reader,"_api",side_effect=[[{"id":k} for k in range(100)],[{"id":100}]]):
             self.assertEqual(len(reader.reviews(88)),101)
 
