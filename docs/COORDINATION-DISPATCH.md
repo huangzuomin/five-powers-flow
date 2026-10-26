@@ -22,3 +22,9 @@ An application supplies a trusted canonical snapshot and a registered target. It
 Core hermetic tests do not count as physical independent QA. Real Codex thread bridge dispatch/status/actual file evidence, authenticated ChatGPT browser send/visible reply, GitHub approved-review and Actions artifact binding, real Windows restart smoke, and scheduler/daemon durable cursor are NOT_RUN. No human merge/deployment authorization is inferred.
 
 See docs/ISSUE-61-DESIGN-AUDIT.md for the pre-implementation design review.
+
+Read-only GitHub entry: GitHubReadOnlySource('owner/repo').snapshot(...) reads
+Issue, PR, and paginated Reviews through gh api. The Issue author must match
+an explicitly configured approved_owner_login; scope changes or approvals
+from other authorized principals require a separate signed grant mechanism.
+Do not grant GitHub API tokens to DEV worktree code or web driver scripts.

@@ -241,6 +241,38 @@ class RoleDispatchTests(unittest.TestCase):
         self.assertEqual(next_action(observed).role,"dev_lead")
         self.assertFalse(observed.qa_authenticated)
 
+    def test_github_readonly_source_checks_platform_identity_and_pagination(self):
+        from unittest.mock import patch
+        from packages.fpf_coordinator.dispatch.github_reader import GitHubReadOnlySource
+        reader=GitHubReadOnlySource("org/repo")
+        work=("\x60\x60\x60yaml\norder_version: 1\nkind: WORK_ORDER\n"
+              "task_id: T001\nobjective: Approved task\nboundaries:\n"
+              "  allowed_paths: [src/module.py]\nacceptance_criteria: [Tests]\n"
+              "target_branch: feat/demo\n\x60\x60\x60")
+        issue={"html_url":"https://github.com/org/repo/issues/61",
+               "user":{"login":"project-owner"},"body":work,
+               "updated_at":"2026-10-26T15:00:00Z"}
+        with patch.object(reader,"_api",return_value=issue):
+            self.assertEqual(next_action(reader.snapshot(issue_number=61,pr_number=None,
+                project_id="DEMO01",baseline_sha="a"*40,approved_owner_login="project-owner",
+                repo_path=None)).role,"dev_lead")
+            with self.assertRaisesRegex(ValueError,"authorized project owner"):
+                reader.snapshot(issue_number=61,pr_number=None,project_id="DEMO01",
+                   baseline_sha="a"*40,approved_owner_login="unknown",repo_path=None)
+        with patch.object(reader,"_api",side_effect=[[{"id":k} for k in range(100)],[{"id":100}]]):
+            self.assertEqual(len(reader.reviews(88)),101)
+
+    def test_github_readonly_source_never_runs_write_commands(self):
+        from unittest.mock import patch
+        from packages.fpf_coordinator.dispatch.github_reader import GitHubReadOnlySource
+        import types
+        reader=GitHubReadOnlySource("org/repo")
+        with patch("packages.fpf_coordinator.dispatch.github_reader.subprocess.run",
+                   return_value=types.SimpleNamespace(returncode=0,stdout="{}")) as runner:
+            reader.issue(61)
+            command=runner.call_args.args[0]
+            self.assertEqual(command,["gh","api","repos/org/repo/issues/61"])
+
     def test_real_git_dev_card_then_qa_dispatch(self):
         with tempfile.TemporaryDirectory() as td:
             repo=Path(td)
@@ -275,6 +307,20 @@ class RoleDispatchTests(unittest.TestCase):
                                project_id="DEMO01",repo_path=repo,scope_authorized=True)
             self.assertTrue(observed.dev_validated)
             self.assertEqual(next_action(observed).role,"qa_lead")
+            bad_qa={"kind":"QA_RESULT","task_id":"T001","tested_sha":head,
+                    "author":"qa-reviewer","verdict":"FAIL"}
+            reviews=[{"state":"CHANGES_REQUESTED","commit_id":head,
+                      "user":{"login":"qa-reviewer"},
+                      "body":"\x60\x60\x60yaml\n"+yaml.safe_dump(bad_qa)+"\x60\x60\x60"}]
+            fail=from_github_records(issue,pr,baseline_sha=base,
+                project_id="DEMO01",repo_path=repo,scope_authorized=True,reviews=reviews)
+            self.assertEqual(next_action(fail).role,"dev_lead")
+            good_qa={**bad_qa,"verdict":"PASS"}
+            passed=[{**reviews[0],"state":"APPROVED",
+                     "body":"\x60\x60\x60yaml\n"+yaml.safe_dump(good_qa)+"\x60\x60\x60"}]
+            unproven=from_github_records(issue,pr,baseline_sha=base,
+                project_id="DEMO01",repo_path=repo,scope_authorized=True,reviews=passed)
+            self.assertEqual(next_action(unproven).phase,"BLOCKED")
             wrong=from_github_records(issue,{**pr,"user":{"login":"wrong"}},
                                baseline_sha=base,project_id="DEMO01",
                                repo_path=repo,scope_authorized=True)
