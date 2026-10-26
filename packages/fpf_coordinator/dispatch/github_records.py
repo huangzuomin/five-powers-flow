@@ -43,7 +43,7 @@ def from_github_records(
     work = parse_card(str(issue.get("body") or ""), "WORK_ORDER")
     if work is None:
         raise ValueError("GitHub Issue lacks WORK_ORDER; cannot dispatch")
-    schema_path = Path(__file__).resolve().parents[2] / "schemas" / "work-order.schema.json"
+    schema_path = Path(__file__).resolve().parents[3] / "schemas" / "work-order.schema.json"
     if not schema_path.is_file():
         raise ValueError("Trusted WORK_ORDER schema missing; refusing to skip")
     jsonschema.Draft7Validator(json.loads(schema_path.read_text(encoding="utf-8"))).validate(work)

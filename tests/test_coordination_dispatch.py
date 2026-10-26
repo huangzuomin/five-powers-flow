@@ -8,12 +8,12 @@ import tempfile
 import unittest
 import yaml
 
-from packages.fpf_coordination.core import CanonicalSnapshot, Target, make_packet, next_action
-from packages.fpf_coordination.controller import Coordinator
-from packages.fpf_coordination.journal import DispatchJournal
-from packages.fpf_coordination.transports import (
+from packages.fpf_coordinator.dispatch.core import CanonicalSnapshot, Target, make_packet, next_action
+from packages.fpf_coordinator.dispatch.controller import Coordinator
+from packages.fpf_coordinator.dispatch.journal import DispatchJournal
+from packages.fpf_coordinator.dispatch.transports import (
     CodexThreadBridge, ChatGPTWebTransport, Receipt, Observation, UnavailableTransport)
-from packages.fpf_coordination.github_records import from_github_records
+from packages.fpf_coordinator.dispatch.github_records import from_github_records
 
 
 class Driver:

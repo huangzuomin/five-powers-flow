@@ -28,7 +28,7 @@ real provider-specific adapters and live acceptance second.
 
 ## Scope, integrity and authority
 
-Implement `packages/fpf_coordination/` containing strict packets, an
+Implement `packages/fpf_coordinator/dispatch/` containing strict packets, an
 operator-owned target registry, a transport protocol, bridge/web adapter
 facades (driver injection required), a persistent checkpoint/event journal,
 and a fail-closed dispatch controller. A canonical-state reducer derives
