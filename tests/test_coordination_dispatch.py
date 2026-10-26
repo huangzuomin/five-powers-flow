@@ -1,0 +1,246 @@
+"""Issue #61 regression suite. Fake drivers are NOT live QA evidence."""
+import hashlib
+import json
+from dataclasses import replace
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+from packages.fpf_coordination.core import CanonicalSnapshot, Target, make_packet, next_action
+from packages.fpf_coordination.controller import Coordinator
+from packages.fpf_coordination.journal import DispatchJournal
+from packages.fpf_coordination.transports import (
+    CodexThreadBridge, ChatGPTWebTransport, Receipt, Observation, UnavailableTransport)
+from packages.fpf_coordination.github_records import from_github_records
+
+
+class Driver:
+    def __init__(self):
+        self.sent=[]
+        self.state="accepted"
+        self.raise_after_send=False
+
+    def send_thread_message(self, **kw):
+        self.sent.append(kw)
+        if self.raise_after_send:
+            raise ConnectionError("possible send before transport disconnect")
+        return {"thread_id":kw["thread_id"],"request_id":kw["request_id"],
+                "turn_id":"turn-001","message_id":"msg-001"}
+
+    def thread_status(self, **kw):
+        return {"thread_id":kw["thread_id"],"turn_id":kw["turn_id"],
+                "state":self.state,"result_ref":"runner://001",
+                "output_sha256":hashlib.sha256(b"actual fixture").hexdigest()}
+
+    def cancel_thread_turn(self, **kw):
+        return True
+
+
+class WebDriver:
+    def send_visible_message(self, **kw):
+        return {"conversation_url":kw["conversation_url"],
+                "request_id":kw["request_id"],"message_visible":True,
+                "turn_id":"turn-web","message_id":"msg-web"}
+    def read_visible_reply(self, **kw):
+        return {"conversation_url":kw["conversation_url"],"state":"completed",
+                "result_ref":"web://turn-web",
+                "output_sha256":hashlib.sha256(b"reply fixture").hexdigest()}
+
+
+def state(**diff):
+    x=CanonicalSnapshot(
+        "T001","DEMO01","https://github.com/org/repo/issues/61","2026-10-26T01:00Z",
+        "a"*40,None,"Implement bounded feature",("Pass regression tests",),
+        ("src/module.py",),True,True,attempt=1,max_attempts=2)
+    return replace(x,**diff)
+
+
+class RoleDispatchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory()
+        self.path=Path(self.tmp.name)/"coordination.db"
+        self.ledger=DispatchJournal(self.path)
+        self.dev=Target("DEMO01","dev_lead","codex_thread","codex-thread-001",
+                        "C:/FPF/dev",approved=True)
+        self.qa=Target("DEMO01","qa_lead","codex_thread","codex-thread-qa01",
+                       "C:/FPF/qa",approved=True)
+        self.driver=Driver()
+        self.engine=Coordinator(self.ledger,{"dev_lead":self.dev,"qa_lead":self.qa},
+                                {"codex_thread":CodexThreadBridge(self.driver)},max_polls=3)
+
+    def tearDown(self):
+        self.ledger.close()
+        self.tmp.cleanup()
+
+    def test_one_send_only_after_repeated_ticks(self):
+        first=self.engine.dispatch_next(state())
+        second=self.engine.dispatch_next(state())
+        self.assertEqual(first["phase"],"ACKNOWLEDGED")
+        self.assertEqual(first["request_id"],second["request_id"])
+        self.assertEqual(len(self.driver.sent),1)
+        self.assertEqual(len(self.ledger.events(first["request_id"])),3)
+
+    def test_accepted_and_completed_are_not_qa_pass(self):
+        req=self.engine.dispatch_next(state())["request_id"]
+        self.assertEqual(self.engine.observe(req)["phase"],"ACKNOWLEDGED")
+        self.driver.state="running"
+        self.assertEqual(self.engine.observe(req)["phase"],"RUNNING")
+        self.driver.state="completed"
+        self.assertEqual(self.engine.observe(req)["phase"],"TRANSPORT_COMPLETED_UNVERIFIED")
+
+    def test_restart_during_sending_never_resends(self):
+        packet=make_packet(state(),self.dev)
+        self.ledger.create(packet,self.dev)
+        self.ledger.set_phase(packet.request_id,"SENDING")
+        self.ledger.close()
+        self.ledger=DispatchJournal(self.path)
+        self.engine=Coordinator(self.ledger,{"dev_lead":self.dev},
+                                {"codex_thread":CodexThreadBridge(self.driver)})
+        row=self.engine.dispatch_next(state())
+        self.assertEqual(row["phase"],"BLOCKED_RECONCILIATION")
+        self.assertEqual(self.driver.sent,[])
+
+    def test_post_send_exception_is_ambiguous_and_no_retry(self):
+        self.driver.raise_after_send=True
+        row=self.engine.dispatch_next(state())
+        self.assertEqual(row["phase"],"BLOCKED_RECONCILIATION")
+        self.engine.dispatch_next(state())
+        self.assertEqual(len(self.driver.sent),1)
+
+    def test_changed_revision_cannot_duplicate_task(self):
+        self.engine.dispatch_next(state())
+        with self.assertRaisesRegex(ValueError,"revision/target drift"):
+            self.engine.dispatch_next(state(revision="2026-10-26T02:00Z"))
+
+    def test_no_scope_grant_means_no_dispatch(self):
+        self.assertEqual(self.engine.dispatch_next(state(scope_authorized=False))["phase"],
+                         "HUMAN_GATE_SCOPE")
+        self.assertEqual(self.driver.sent,[])
+
+    def test_dev_handoff_must_be_validated_and_on_pr_head(self):
+        card={"tested_code_sha":"b"*40}
+        self.assertEqual(next_action(state(dev_card=card,pr_head_sha="b"*40)).phase,"BLOCKED")
+        self.assertEqual(next_action(state(dev_card=card,dev_validated=True,
+                                           pr_head_sha="c"*40)).phase,"BLOCKED")
+        authorized=state(dev_card=card,dev_validated=True,pr_head_sha="b"*40)
+        self.assertEqual(next_action(authorized).role,"qa_lead")
+        self.engine.dispatch_next(authorized)
+        self.assertEqual(self.driver.sent[0]["thread_id"],self.qa.identity)
+
+    def test_qa_self_signed_pass_is_blocked(self):
+        current=state(dev_card={"tested_code_sha":"b"*40},dev_validated=True,
+                      pr_head_sha="b"*40,
+                      qa_card={"tested_sha":"b"*40,"verdict":"PASS"})
+        self.assertEqual(next_action(current).phase,"BLOCKED")
+        self.assertEqual(next_action(replace(current,qa_authenticated=True)).phase,
+                         "QA_PASSED_AWAITING_OWNER_MERGE")
+
+    def test_bounded_rework(self):
+        current=state(dev_card={"tested_code_sha":"b"*40},dev_validated=True,
+                      pr_head_sha="b"*40,qa_authenticated=True,
+                      qa_card={"tested_sha":"b"*40,"verdict":"FAIL"})
+        self.assertEqual(next_action(current).role,"dev_lead")
+        self.assertEqual(next_action(replace(current,attempt=2)).phase,"BLOCKED")
+
+    def test_unknown_provider_observation_never_means_failure(self):
+        req=self.engine.dispatch_next(state())["request_id"]
+        self.driver.state="unknown"
+        self.assertEqual(self.engine.observe(req)["phase"],"BLOCKED_RECONCILIATION")
+
+    def test_bounded_observation_poll_count(self):
+        req=self.engine.dispatch_next(state())["request_id"]
+        for _ in range(3):
+            self.engine.observe(req)
+        self.assertEqual(self.engine.observe(req)["phase"],"BLOCKED_RECONCILIATION")
+
+    def test_wrong_project_and_unknown_transport_rejected(self):
+        target=Target("OTHER01","dev_lead","codex_thread","codex-thread-001",
+                      "C:/FPF/dev",approved=True)
+        with self.assertRaisesRegex(ValueError,"another project"):
+            make_packet(state(),target)
+        engine=Coordinator(self.ledger,{"dev_lead":self.dev},{})
+        self.assertEqual(engine.dispatch_next(state())["phase"],"BLOCKED")
+
+    def test_explicit_chatgpt_target_and_visible_reply_only(self):
+        with self.assertRaises(ValueError):
+            Target("DEMO01","dev_lead","chatgpt_web",
+                   "https://chatgpt.com/c/abcdef123456","web",approved=False)
+        target=Target("DEMO01","dev_lead","chatgpt_web",
+                      "https://chatgpt.com/c/abcdef123456","web",approved=True)
+        transport=ChatGPTWebTransport(WebDriver())
+        receipt=transport.dispatch(target,make_packet(state(),target))
+        self.assertEqual(transport.read_status(target,receipt).state,"completed")
+
+    def test_unavailable_bridge_blocks_instead_of_inventing_receipt(self):
+        engine=Coordinator(self.ledger,{"dev_lead":self.dev},
+                           {"codex_thread":UnavailableTransport()})
+        self.assertEqual(engine.dispatch_next(state())["phase"],"BLOCKED_RECONCILIATION")
+
+    def test_never_authorize_merge_deploy_qa_signing(self):
+        self.assertFalse(set(make_packet(state(),self.dev).allowed_actions) &
+                         {"merge","deploy","publish","sign_qa"})
+        with self.assertRaises(ValueError):
+            state(record_url="https://github.com.evil.org/x/y/issues/61")
+
+    def test_receipts_require_exact_turn_and_output_digest(self):
+        with self.assertRaises(ValueError):
+            Receipt("req","identity","","message")
+        with self.assertRaises(ValueError):
+            Observation("req","identity","completed","ref",None)
+
+    def test_read_work_order_from_github_issue(self):
+        body=("\x60\x60\x60yaml\norder_version: 1\nkind: WORK_ORDER\n"
+              "task_id: T001\nobjective: Test one feature\n"
+              "boundaries:\n  allowed_paths: [src/module.py]\n"
+              "acceptance_criteria: [Unit tests pass]\n"
+              "target_branch: feat/demo\n\x60\x60\x60")
+        issue={"html_url":"https://github.com/org/repo/issues/61",
+               "updated_at":"2026-10-26T01:00:00Z","body":body}
+        observed=from_github_records(issue,None,baseline_sha="a"*40,
+                                     project_id="DEMO01",scope_authorized=True)
+        self.assertEqual(next_action(observed).role,"dev_lead")
+        self.assertFalse(observed.qa_authenticated)
+
+    def test_real_git_dev_card_then_qa_dispatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo=Path(td)
+            def git(*args):
+                return subprocess.check_output(["git",*args],cwd=repo,text=True).strip()
+            git("init","-b","main")
+            git("config","user.name","Fixture")
+            git("config","user.email","fixture@example.invalid")
+            (repo/"base.txt").write_text("base")
+            git("add",".");git("commit","-m","base")
+            base=git("rev-parse","HEAD")
+            (repo/"new.py").write_text("x=1")
+            git("add",".");git("commit","-m","feature")
+            head=git("rev-parse","HEAD")
+            body=("\x60\x60\x60yaml\norder_version: 1\nkind: WORK_ORDER\n"
+                  "task_id: T001\nobjective: Test\nboundaries:\n"
+                  "  allowed_paths: [new.py]\nacceptance_criteria: [Check]\n"
+                  "target_branch: feat/x\n\x60\x60\x60")
+            issue={"html_url":"https://github.com/org/repo/issues/61",
+                   "updated_at":"2026-10-26T01:00:00Z","body":body}
+            dev={"handoff_version":1,"kind":"DEV_HANDOFF","task_id":"T001",
+                 "baseline_sha":base,"tested_code_sha":head,
+                 "pr_url":"https://github.com/org/repo/pull/90",
+                 "state":"DEV_READY_FOR_QA","author":"developer",
+                 "changed_files":["new.py"],
+                 "dev_checks":[{"command":"python tests","exit_code":0}],
+                 "not_run":["API integration not run"]}
+            # JSON is a YAML subset.
+            pr={"html_url":dev["pr_url"],"head":{"sha":head},"user":{"login":"developer"},
+                "body":"\x60\x60\x60yaml\n"+json.dumps(dev)+"\n\x60\x60\x60"}
+            observed=from_github_records(issue,pr,baseline_sha=base,
+                               project_id="DEMO01",repo_path=repo,scope_authorized=True)
+            self.assertTrue(observed.dev_validated)
+            self.assertEqual(next_action(observed).role,"qa_lead")
+            wrong=from_github_records(issue,{**pr,"user":{"login":"wrong"}},
+                               baseline_sha=base,project_id="DEMO01",
+                               repo_path=repo,scope_authorized=True)
+            self.assertEqual(next_action(wrong).phase,"BLOCKED")
+
+
+if __name__=="__main__":
+    unittest.main()
