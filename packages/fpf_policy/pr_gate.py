@@ -24,6 +24,7 @@ BOOT_FILES = frozenset({
     ".claude/settings.json", ".github/codeowners",
 })
 MAP_FILES = frozenset({"project-map.md", "lessons.md",
+                       "docs/project-map.md",
                        "docs/coordination/project-map.md",
                        "docs/coordination/lessons.md"})
 

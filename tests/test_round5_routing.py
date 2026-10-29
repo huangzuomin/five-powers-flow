@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
-from packages.fpf_policy.pr_gate import classify, verified_reviewer
+from packages.fpf_policy.pr_gate import classify, evaluate, verified_reviewer
 from packages.fpf_runtime.evidence_bridge import export_fpf_manifest
 from packages.fpf_coordinator.coordinator import REQUIRED_PROFILE_EVIDENCES, verify_evidence_directory
 from packages.fpf_bootstrap.bootstrap import doctor, apply, plan
@@ -12,6 +12,56 @@ from packages.fpf_bootstrap.discovery import git
 import subprocess
 
 class TestTrustRouting(unittest.TestCase):
+    def test_map_update_accepts_existing_and_vendor_project_map_paths(self):
+        for path in (
+            "PROJECT-MAP.md",
+            "LESSONS.md",
+            "docs/coordination/PROJECT-MAP.md",
+            "docs/coordination/LESSONS.md",
+            "docs/PROJECT-MAP.md",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([path], "MAP_UPDATE", set(), "feat/map"),
+                    "MAP_PR",
+                )
+
+    def test_map_update_rejects_non_map_and_mixed_changes(self):
+        with self.assertRaisesRegex(ValueError, "non-map paths"):
+            classify(["src/app.py"], "MAP_UPDATE", set(), "feat/map")
+        with self.assertRaisesRegex(ValueError, "non-map paths"):
+            classify(
+                ["docs/PROJECT-MAP.md", "README.md"],
+                "MAP_UPDATE",
+                set(),
+                "feat/map",
+            )
+
+    def test_map_update_still_requires_approval_and_other_routes_remain_protected(self):
+        head = "a" * 40
+        base = "b" * 40
+        event = {
+            "pull_request": {
+                "head": {"sha": head, "ref": "feat/map"},
+                "base": {"sha": base},
+                "user": {"login": "developer"},
+                "body": (
+                    "```yaml\n"
+                    "kind: MAP_UPDATE\n"
+                    f"code_merged_sha: {base}\n"
+                    "```"
+                ),
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "Independent platform APPROVED"):
+            evaluate(event, [], ["docs/PROJECT-MAP.md"], set())
+        self.assertEqual(
+            classify(["docs/PROJECT-MAP.md"], "POLICY_CHANGE", set(), "fix/policy"),
+            "GATE_PR",
+        )
+        with self.assertRaisesRegex(ValueError, "protected"):
+            classify(["docs/PROJECT-MAP.md"], "DEV_HANDOFF", set(), "feat/example")
+
     def test_code_pr_cannot_modify_policy(self):
         with self.assertRaisesRegex(ValueError, "protected"):
             classify(["src/app.py","AGENTS.md"],"DEV_HANDOFF",set(),"feat/example")
