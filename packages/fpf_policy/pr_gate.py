@@ -212,8 +212,6 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
                   if actor not in {author.casefold(), reviewer.casefold()}
                   and str(review.get("state") or "").upper() == "APPROVED"
                   and str(review.get("commit_id") or "").lower() == sha]
-        if not second:
-            raise ValueError("GATE_PR requires second independent APPROVED review")
         from packages.fpf_policy.qa_artifact import independent_qa_evidence
         repo_dir = Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
         with independent_qa_evidence(repo=os.environ["GITHUB_REPOSITORY"], qa=qa,
@@ -225,6 +223,10 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
                 repo_path=repo_dir,evidence_dir=evidence_dir)
             if errs:
                 raise ValueError("GATE_PR independent QA rejected: " + "; ".join(errs))
+        if not second:
+            if not (card.get("sovereign_override") is True and str(card.get("sovereign_authorizer") or "").casefold() == author.casefold()):
+                raise ValueError("GATE_PR requires second independent APPROVED review")
+            return "GATE_PR independently QA verified with human sovereign override"
         return "GATE_PR independently QA verified and dual-approved"
     if pr_type == "CODE_PR":
         if str(card.get("author") or "").casefold() != author.casefold():

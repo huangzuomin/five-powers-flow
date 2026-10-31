@@ -17,8 +17,37 @@ import subprocess
 import tempfile
 from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
 import zipfile
+from typing import List
 
 from packages.fpf_coordinator.coordinator import verify_evidence_directory
+
+FORBIDDEN_DEV_QA_PATHS = (
+    "qa-artifact",
+    ".fpf-evidence",
+    "qa-manifest.json",
+    "qa-artifact.zip",
+)
+
+
+def verify_artifact_sha256(data: bytes, expected_digest: str) -> None:
+    """Cryptographically verify that artifact payload matches claimed digest."""
+    if not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", expected_digest):
+        raise ValueError("GitHub artifact digest missing or invalid format; refusing unbound bytes")
+    computed = hashlib.sha256(data).hexdigest()
+    if computed != expected_digest[7:].lower():
+        raise ValueError(
+            f"Artifact digest mismatch! Expected {expected_digest[7:].lower()}, computed {computed}"
+        )
+
+
+def check_dev_branch_decoupling(repository_dir: Path) -> List[str]:
+    """Verify that candidate DEV PR workspace contains zero smuggled or inlined QA artifacts."""
+    violations = []
+    for pattern in FORBIDDEN_DEV_QA_PATHS:
+        target = repository_dir / pattern
+        if target.exists():
+            violations.append(f"Inlined QA evidence found in candidate workspace: {pattern}")
+    return violations
 
 
 def api_json(repo: str, endpoint: str, token: str) -> dict:
@@ -75,6 +104,10 @@ def independent_qa_evidence(*, repo: str, qa: dict, reviewer: str,
                              tested_sha: str, task_id: str, token: str,
                              repository_dir: Path):
     """Yield verified physical files from a GitHub artifact, never DEV checkout."""
+    decoupling_errors = check_dev_branch_decoupling(repository_dir)
+    if decoupling_errors:
+        raise ValueError("QA decoupling violation: " + "; ".join(decoupling_errors))
+
     try:
         run_id = int(qa["qa_run_id"])
         artifact_id = int(qa["qa_artifact_id"])
@@ -105,10 +138,7 @@ def independent_qa_evidence(*, repo: str, qa: dict, reviewer: str,
         raise ValueError("Artifact identity, lifetime or SHA-specific name mismatch")
     data = download_zip(repo, artifact_id, token)
     digest = str(artifact.get("digest") or "")
-    if not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest):
-        raise ValueError("GitHub artifact digest missing or invalid; refusing unbound bytes")
-    if hashlib.sha256(data).hexdigest() != digest[7:].lower():
-        raise ValueError("GitHub-provided artifact digest does not match ZIP")
+    verify_artifact_sha256(data, digest)
     with tempfile.TemporaryDirectory(prefix="fpf-independent-qa-") as tmp:
         root = Path(tmp)
         with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
