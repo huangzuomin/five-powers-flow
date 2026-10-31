@@ -35,17 +35,3 @@ Thumbs.db
 coordination-ledger.local.json
 .fpf-runtime/
 .fpf-state/
-
-# Local rehearsal & ad-hoc operation scripts/drafts
-/docs/plans/
-/docs/vibe-evidence/
-/*.txt
-/*_body.md
-/pr*.md
-/map_*.md
-/dispatch_*.py
-/create_*.py
-/submit_*.py
-/update_*.py
-/temp_*.py
-/test_*_stage*.py

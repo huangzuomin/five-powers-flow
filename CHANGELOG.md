@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Added regression unit test `test_qa_evidence_dir_export_manifest` in `tests/test_slice_runtime.py`.
 - Added `--allow-existing-governance` flag to `fpf init` (`packages/fpf_bootstrap`) to onboard repositories with existing baseline governance files without collision or unintended overwrites.
 - Added unit tests in `tests/test_project_bootstrap.py` covering existing governance preservation.
-- Hardened `.gitignore` to prevent local ad-hoc rehearsal scripts and session rollout archives from polluting open-source tracking.
+- Hardened repository exclusion hygiene to prevent local ad-hoc rehearsal scripts and session rollout archives from polluting open-source tracking; expanded POLICY_CHANGE scope in `packages/fpf_policy/pr_gate.py` to recognize root repository configuration files.
 
 ### Fixed (Audit round five — pending independent QA)
 - Reject placeholder evidence, self-attested test exemptions, unsigned authorship strings as proof, and unknown evidence profiles.
