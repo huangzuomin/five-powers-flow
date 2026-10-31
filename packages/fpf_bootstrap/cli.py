@@ -20,6 +20,8 @@ def main() -> int:
     ini.add_argument("--base-ref", default="HEAD")
     ini.add_argument("--rollback", action="store_true",
                      help="Explicitly rollback a safely identified incomplete bootstrap")
+    ini.add_argument("--allow-existing-governance", action="store_true",
+                     help="Preserve existing governance files present in baseline")
     ini.add_argument("--apply", action="store_true",
                      help="Create bootstrap, DEV and QA worktrees; does not commit or push")
     doc = commands.add_parser("doctor", help="Check existing project bootstrap")
@@ -40,7 +42,8 @@ def main() -> int:
                 print(json.dumps(outcome, ensure_ascii=False, indent=2))
                 return 0
             proposal = plan(args.repo, args.workspace_root, args.project_id,
-                            args.title, args.agent_mode, args.base_ref, args.docs_dir)
+                            args.title, args.agent_mode, args.base_ref, args.docs_dir,
+                            allow_existing_governance=args.allow_existing_governance)
             if args.apply:
                 outcome = apply(args.repo, proposal)
                 print(json.dumps(outcome, ensure_ascii=False, indent=2))

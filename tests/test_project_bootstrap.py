@@ -101,6 +101,16 @@ class TestProjectBootstrap(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "governance files"):
             self.proposal()
 
+    def test_allow_existing_governance_preserves_tracked_files(self):
+        (self.repo / "AGENTS.md").write_text("Existing constitution", encoding="utf-8")
+        cmd(self.repo, "git", "add", "AGENTS.md")
+        cmd(self.repo, "git", "commit", "-m", "governance exists")
+        from packages.fpf_bootstrap.bootstrap import plan
+        prop = plan(self.repo, self.workspace, "DEMO01", "Demo", "manual",
+                    allow_existing_governance=True)
+        self.assertNotIn("AGENTS.md", prop["files"])
+        self.assertIn(".fpf/project.yaml", prop["files"])
+
     def test_doctor_does_not_claim_project_ready_before_approval(self):
         apply(self.repo, self.proposal())
         report = doctor(self.repo, self.workspace, "DEMO01")

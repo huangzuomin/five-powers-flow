@@ -71,10 +71,11 @@ def role_prompt(role: str, project_id: str) -> str:
             "Report what was done, what remains unverified, and next authorized action.\n")
 
 def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str, str]:
+    map_path = discovered.get("project_map") or "docs/coordination/PROJECT-MAP.md"
     project = {
         "fpf_project_version": 1, "project_id": project_id, "title": title,
         "baseline_sha": discovered["sha"],
-        "project_map": "docs/coordination/PROJECT-MAP.md",
+        "project_map": map_path,
         "bootstrap_state": "BOOTSTRAP_REVIEW", "agent_mode": mode,
         "slice_authorized": False, "human_approval_required": True,
     }
@@ -90,7 +91,6 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
             "QA must review a fixed SHA without modifying application code. "
             "No autonomous main merge or deployment. All roles must review "
             "docs/coordination/LESSONS.md before work.\n"),
-        "docs/coordination/PROJECT-MAP.md": map_text(project_id, title, discovered),
         "docs/coordination/LESSONS.md": (
             "# LESSONS\n\n> 初始化空错题本；只记录真实发现且经核验的教训。\n\n"
             "| ID | 关联切片 | 缺陷与证据 | 人工批准 |\n|---|---|---|---|\n"),
@@ -106,6 +106,8 @@ def bundle(project_id: str, title: str, discovered: dict, mode: str) -> dict[str
             {"baseline_sha": discovered["sha"], "documents": discovered["documents"],
              "modules": discovered["modules"]}, indent=2, ensure_ascii=False) + "\n",
     }
+    if not discovered.get("project_map"):
+        result["docs/coordination/PROJECT-MAP.md"] = map_text(project_id, title, discovered)
     for role in ROLES:
         result[".fpf/prompts/" + role + ".md"] = role_prompt(role, project_id)
     if mode == "manual":

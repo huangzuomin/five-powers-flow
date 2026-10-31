@@ -53,5 +53,14 @@ def inventory(repo: Path, base_ref: str = "HEAD", docs_dir: str = "docs") -> dic
         docs.append({"path": path, "headings": headings, "note": "unverified_document"})
     top_dirs = sorted({p.split("/")[0] for p in tracked
                        if "/" in p and p.split("/")[0] not in SKIP_DIRS})[:30]
+    existing_map = None
+    for cand in ("docs/project-map.md", "docs/coordination/project-map.md", "project-map.md"):
+        for t in tracked:
+            if t.lower() == cand:
+                existing_map = t
+                break
+        if existing_map:
+            break
     return {"repo": str(root), "sha": sha, "base_ref": base_ref,
-            "tracked_files": len(tracked), "modules": top_dirs, "documents": docs}
+            "tracked_files": len(tracked), "modules": top_dirs, "documents": docs,
+            "project_map": existing_map}

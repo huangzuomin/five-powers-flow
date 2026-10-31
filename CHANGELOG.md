@@ -8,11 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 - Fixed `SliceRuntime` type subtraction defect (`TypeError: unsupported operand type(s) for -: 'list' and 'set'`) in `packages/fpf_runtime/runtime.py`.
 - Upgraded `.fpf/qa-plan.json` and `templates/qa-plan.example.json` commands from placeholder print outputs to real AST parsing, bytecode compilation, and file assertions (R4 remediation).
+- Fixed GitHub Actions QA artifact download in `packages/fpf_policy/qa_artifact.py` by stripping `Authorization` bearer headers on pre-signed S3 redirects (`_NoAuthRedirectHandler`).
+- Enhanced QA workflow provenance verification to inspect `origin/{base_ref}` and `refs/remotes/origin/{base_ref}` in addition to local base references.
 
 ### Added
 - Added Five-Powers-Flow Standard Operational Guide in `docs/OPERATIONAL-GUIDE.md`.
 - Added OMAP Real-Project Rehearsal Third-Party Independent Audit Report in `docs/AUDIT-OMAP-REHEARSAL.md`.
 - Added regression unit test `test_qa_evidence_dir_export_manifest` in `tests/test_slice_runtime.py`.
+- Added `--allow-existing-governance` flag to `fpf init` (`packages/fpf_bootstrap`) to onboard repositories with existing baseline governance files without collision or unintended overwrites.
+- Added unit tests in `tests/test_project_bootstrap.py` covering existing governance preservation.
+- Hardened repository exclusion hygiene to prevent local ad-hoc rehearsal scripts and session rollout archives from polluting open-source tracking; expanded POLICY_CHANGE scope in `packages/fpf_policy/pr_gate.py` to recognize root repository configuration files.
 
 ### Fixed (Audit round five — pending independent QA)
 - Reject placeholder evidence, self-attested test exemptions, unsigned authorship strings as proof, and unknown evidence profiles.

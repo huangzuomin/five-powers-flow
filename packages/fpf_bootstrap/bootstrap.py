@@ -50,7 +50,8 @@ def _ensure_worktree(repo: Path, directory: Path, branch: str | None, sha: str) 
 
 def plan(repo: Path, workspace_root: Path, project_id: str,
          title: str, mode: str, base_ref: str = "HEAD",
-         docs_dir: str = "docs") -> dict:
+         docs_dir: str = "docs",
+         allow_existing_governance: bool = False) -> dict:
     if mode not in ("api", "manual"):
         raise ValueError("agent mode must be api or manual")
     safe_id(project_id)
@@ -62,8 +63,11 @@ def plan(repo: Path, workspace_root: Path, project_id: str,
     tracked = set(git(repo, "ls-tree", "-r", "--name-only", discovered["sha"]).splitlines())
     collision = sorted(tracked.intersection(files))
     if collision:
-        raise RuntimeError("Project already has governance files; refusing overwrite: " +
-                           ", ".join(collision[:12]))
+        if not allow_existing_governance:
+            raise RuntimeError("Project already has governance files; refusing overwrite: " +
+                               ", ".join(collision[:12]))
+        for name in collision:
+            del files[name]
     return {"project_id": project_id, "title": title or project_id, "mode": mode,
             "base_ref": base_ref, "docs_dir": docs_dir,
             "discovery": discovered, "paths": {k: str(v) for k, v in paths.items()},

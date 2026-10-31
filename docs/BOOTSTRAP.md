@@ -37,7 +37,10 @@ extraction and AI synthesis are not yet supported. The initial map is a
 **conservative factual skeleton**, not an AI-generated architecture assessment.
 
 You may point at a specific baseline with --base-ref origin/main and change
-the documentation directory with --docs-dir docs. No GitHub admin token needed.
+the documentation directory with --docs-dir docs. If the target repository already
+has baseline governance files (e.g. AGENTS.md or PROJECT-MAP.md), supply
+--allow-existing-governance to preserve existing tracked governance files instead
+of halting. No GitHub admin token needed.
 
 ## Provision
 
