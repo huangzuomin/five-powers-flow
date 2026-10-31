@@ -284,35 +284,35 @@ Runtime Ledger 与 PR #62 中的 Dispatch Journal 不应简单合并，也不能
 
 2.0 将 **对账与恢复（Reconciliation）** 从单一模块名称提升为**系统级核心治理协议（Reconciliation Protocol）**。在分布式或跨进程执行中，重新读取远端并不天然等同于知晓下一步动作（例如外部 Provider 副作用未收到回执时进程崩溃，盲目重发将导致重复执行，盲目判负将导致孤儿任务）。
 
-#### 1. Reconciliation 状态机与裁决规则
+#### 1. Reconciliation 状态机与远端事实子状态（F-03）
 
-| 状态 | 判定语义 | 允许的系统动作 |
-|---|---|---|
-| `REMOTE_CONFIRMED` | 权威远端已确认对应对象与终态事实 | 以远端事实为准，更新本地账本并恢复调度推进 |
-| `LOCAL_PENDING` | 本地已记录执行意图，远端尚未确认但仍处于轮询窗口内 | 继续对远端执行幂等核验，禁止推进后续状态 |
-| `UNKNOWN_OUTCOME` | 外部副作用发送结果未知（已发出未回执/网络中断/进程崩溃） | **严禁盲目重发**；保持当前任务阻断，启动专有探针核实外部真实状态 |
-| `REMOTE_CONFLICT` | 本地执行记录与权威远端事实冲突（如未授权 SHA 漂移或越权修改） | 立即暂停推进，触发告警并冻结当前工单 |
-| `REMOTE_UNAVAILABLE` | 权威治理后端（如 GitHub API）离线或鉴权失效 | 系统 Fail-Closed 阻断，保持本地意图只读，等待连通性恢复 |
-| `HUMAN_RESOLUTION_REQUIRED` | 存在不可逆状态分歧、探针超时或自动裁决不可达 | 终止自动重试，持久化分歧凭证，升级人类负责人手工裁定 |
+| 状态 | 判定语义 | 允许的系统动作 | 映射远端事实子状态 |
+|---|---|---|---|
+| `REMOTE_CONFIRMED` | 权威远端已确认对应对象与事实存在 | 以远端事实为准，更新本地账本并恢复调度推进 | `REMOTE_ACCEPTED`（已接收待分配）<br>`REMOTE_RUNNING`（执行中）<br>`REMOTE_TERMINAL`（终态回执已生成） |
+| `LOCAL_PENDING` | 本地已记录执行意图，远端尚未确认但仍处于轮询窗口内 | 继续对远端执行幂等核验，禁止推进后续状态 | `REMOTE_UNSEEN` |
+| `UNKNOWN_OUTCOME` | 外部副作用发送结果未知（已发出未回执/网络中断/进程崩溃） | **严禁盲目重发**；保持当前任务阻断，启动专有探针核实外部真实状态 | `REMOTE_UNKNOWN` |
+| `REMOTE_CONFLICT` | 本地执行记录与权威远端事实冲突（如未授权 SHA 漂移或越权修改） | 立即暂停推进，触发告警并冻结当前工单 | `STATE_DIVERGED` |
+| `REMOTE_UNAVAILABLE` | 权威治理后端（如 GitHub API）离线或鉴权失效 | 系统 Fail-Closed 阻断，保持本地意图只读，等待连通性恢复 | `BACKEND_OFFLINE` |
+| `HUMAN_RESOLUTION_REQUIRED` | 存在不可逆状态分歧、探针超时或自动裁决不可达 | 终止自动重试，持久化分歧凭证，升级人类负责人手工裁定 | `ESCALATED_TO_HUMAN` |
 
-#### 2. Agent Provider 幂等能力三级分级模型
+#### 2. Agent Provider 幂等能力三级分级模型与硬性防重约束（F-01 & F-02）
 
 由于外部大模型 Provider 与执行引擎的实现差异，系统不得假设所有 Provider 均具备原生幂等性，必须按能力分级施加恢复策略：
 
-| 能力等级 | Provider 特征 | 适用系统恢复策略与防重约束 |
+| 能力等级 | Provider 特征 | 适用系统恢复策略与硬性防重约束 |
 |---|---|---|
-| **Class A（原生幂等）** | 原生支持 `idempotency_key`，可依据 Key 拒绝重复调用并返回历史结果 | 允许 Control Plane 在网络超时或中断后执行**自动重发与幂等重试**。 |
-| **Class B（可查不可防重）** | 不支持请求级去重，但提供任务或会话查询接口（可通过 Request ID 查询执行历史） | **严禁直接重发**；必须执行“先探针查询历史、确认未执行方可重发，确认已执行则拉取结果”的两阶段恢复。 |
-| **Class C（无查询无幂等）** | 既不支持去重也不提供可信执行历史查询接口（如简单无状态 Webhook 或部分命令行管道） | 发生未知中断时一律强制置为 `UNKNOWN_OUTCOME`，**绝对禁止自动重发**，仅允许保存现场并请求人类介入。 |
+| **Class A（原生幂等）** | 原生支持 `idempotency_key` 过滤 | 允许自动重发，但**必须同时满足三要素**：<br>1. 重发使用原始 `idempotency_key`；<br>2. 请求体标准规范化摘要 `canonical_payload_digest` 必须 100% 严格一致（Key 相同但 Payload 改变时 Provider 必须抛出 `IDEMPOTENCY_CONFLICT` 拒绝）；<br>3. 处于 Provider 声明的有效保留期（Retention Period，如 24 小时）内。 |
+| **Class B（可查不可防重）** | 不支持请求去重，但提供任务查询接口（可查 Request ID 历史） | **严禁直接重发**；明确铁律 **`NOT_FOUND ≠ PROVEN_NOT_EXECUTED`**。<br>受最终一致性延迟影响，只有在 Provider 声明的**最大可见性延迟窗口（Visibility Delay Window，如 30 秒）**过后再次查询仍为 `NOT_FOUND`，或 Provider 官方承诺强一致性查询时，方可裁决为“未执行并安全重发”；否则必须保持 `UNKNOWN_OUTCOME`。 |
+| **Class C（无查询无幂等）** | 既不支持去重也不提供可信执行历史查询接口 | 发生未知中断时一律强制置为 `UNKNOWN_OUTCOME`，**绝对禁止自动重发**，仅允许保存现场证据并升级人类接入。 |
 
 #### 3. 探针恢复算法与超时退避预算（Probe Recovery Algorithm）
 
 针对 `UNKNOWN_OUTCOME` 状态，控制平面必须启动受限只读探针：
 - **只读零副作用契约**：探针仅调用只读查询接口（如 `check_status`、`query_request_receipt`），严禁触发任何产生新任务的写操作。
-- **指数退避探测预算**：探测间隔按 2s、4s、8s、16s 指数退避，总探测超时预算硬性设定为 60 秒。
+- **指数退避与抖动预算**：探测间隔按 2s、4s、8s、16s 指数退避并加入随机抖动（Jitter，±20%），最大单次请求超时 5s，总探测超时预算硬性设定为 60 秒。
 - **决水与超时升级**：
-  - 若在预算时间内探针核实任务已成功接收并生成回执，状态平滑跃迁至 `REMOTE_CONFIRMED`；
-  - 若探针核实任务确未被外部接收，状态置为 `LOCAL_PENDING` 并安全重新派发；
+  - 若在预算时间内探针核实任务已成功接收并生成回执，状态平滑跃迁至 `REMOTE_CONFIRMED`（细化为 `REMOTE_ACCEPTED` 或 `REMOTE_RUNNING`）；
+  - 若经过完整可见性延迟窗口后探针核实任务确未被外部接收，状态置为 `LOCAL_PENDING` 并安全重新派发；
   - 若超过 60 秒依然无法确定外部副作用结果，立即强制跃迁至 `HUMAN_RESOLUTION_REQUIRED`，冻结任务推进，杜绝无限悬挂。
 
 #### 4. 细化权威字段映射与版本合法性校验
@@ -357,9 +357,9 @@ FPF 2.0 至少应统一以下规范对象：
 | Merge / Release Record | 人类批准、合并版本和发布记录 |
 | Context Pack | 任务执行所需的项目规范和知识快照 |
 
-### 5.1 统一事件信封、原子 CAS 并发控制与回放隔离铁律
+### 5.1 统一事件信封、Transactional Outbox 与回放副作用物理隔离
 
-建议所有跨模块事件采用包含严格因果关系、并发版本校验和回放隔离语义的公共信封契约：
+建议所有跨模块事件采用包含严格因果关系、事务发件箱与回放隔离语义的公共信封契约：
 
 - `event_id`：全局唯一事件标识。采用 UUIDv7 生成，具备**局部时间排序特征**，但**不代表全局严格单调递增**。全局严格逻辑顺序由权威存储分配的 `sequence` 保证。
 - `event_schema_version`：事件信封与载荷的契约版本，支持跨版本向后兼容。
@@ -376,26 +376,39 @@ FPF 2.0 至少应统一以下规范对象：
 - `source_adapter`：事件来源适配器及环境标识。
 - `object_refs`：Commit SHA、PR Number、Workflow Run ID、Artifact SHA 等外部权威引用。
 - `payload_digest`：事件载荷的 SHA-256 哈希摘要，保障事件防篡改。
-- `replay_policy`：事件回放策略枚举（`PROJECTION_ONLY` 为强制默认策略，严禁产生外部真实副作用）。
+- `replay_policy`：事件回放策略枚举（`PROJECTION_ONLY` 为强制默认策略，运行时物理阻断外部副作用）。
 
-#### 原子 CAS（Compare-And-Swap）写入控制规则
+#### 原子 CAS 与 Transactional Outbox 事务契约（F-06）
 
-为防止多 Runner 或多进程同时写入引发状态覆写，所有事件持久化必须遵守原子 CAS 规则：
+为彻底消除“数据库版本已提交但事件发布失败导致下游丢事件”或“事件已发布但数据库事务回滚导致幻读消费”的双写不一致故障窗口，事件引擎必须实现 Transactional Outbox 契约：
 
 ```
-读取当前 aggregate_version (V)
+BEGIN TRANSACTION;
+  -- 1. 原子 CAS 并发校验
+  SELECT aggregate_version FROM task_aggregates WHERE aggregate_id = :agg_id;
+  IF current_version != expected_version THEN
+    ROLLBACK; -- 触发对账与恢复协议 (Reconciliation)
+  END IF;
+
+  -- 2. 写入事件流水并原子递增聚合版本
+  INSERT INTO task_events (event_id, aggregate_id, sequence, payload, ...);
+  UPDATE task_aggregates SET aggregate_version = aggregate_version + 1;
+
+  -- 3. 同一本地事务中写入 Outbox 发件箱表
+  INSERT INTO transactional_outbox (outbox_id, event_id, destination, status, created_at);
+COMMIT;
+
+-- 4. 异步 Outbox Dispatcher
+Outbox Dispatcher 守护进程 (CDC 或定时轮询) ──> 保证 At-Least-Once 投递至事件总线
        ↓
-提交新事件包时执行原子校验: expected_version == current_version (V)
-       ↓
-【版本匹配】──> 原子递增写入 (V+1)，生成单调 sequence，发布事件
-       ↓
-【版本冲突】──> 拒绝写入！控制平面触发对账与恢复协议 (Reconciliation)，重新拉取权威状态
+-- 5. 下游幂等消费
+下游订阅者按 event_id 进行幂等表去重消费 ──> 回写 Outbox 确认完成
 ```
 
 #### 事件回放（Event Replay）与外部副作用绝对物理隔离铁律
 
 必须严格区分**事件回放（Event Replay）**与**命令重执行（Command Re-execution）**：
-1. **事件回放（Event Replay）**：仅用于系统冷启动、灾备重建、内存投影更新或本地审查。回放期间的 `replay_policy` 必须为 `PROJECTION_ONLY`，系统底层的网络适配器、Tool Gateway、GitHub API 客户端与 Agent Provider 必须被**硬性熔断或 Mock 化**，**绝对禁止产生任何外部写副作用**。
+1. **事件回放（Event Replay）**：仅用于系统冷启动、灾备重建、内存投影更新或本地审查。回放期间的 `replay_policy` 必须为 `PROJECTION_ONLY`。在运行时层面，系统底层的网络适配器、Tool Gateway、GitHub API 客户端与 Agent Provider 必须被**硬性切断或替换为 NullMock**，**绝对禁止产生任何外部网络请求、写操作或模型调用**。
 2. **命令重执行（Command Re-execution）**：若需重新执行某项业务动作，必须生成全新的命令意图（包含全新的 `request_id` 与递增的 `attempt_id`），重新走五权授权、参数校验与幂等派发通道，绝不允许假借“回放历史事件”名义隐式重发请求。
 
 事件记录应追加写入，禁止用后续状态覆盖历史事实。状态是对经过验证事件流的确定性归约结果，而不是 Agent 自由填写的字段。
@@ -427,7 +440,7 @@ FPF 2.0 不要求所有外部系统采用相同技术栈，但要求它们遵守
 
 ### 6.1 三层执行后端架构与 Windows 11 原生安全隔离契约
 
-FPF 的核心目标是统一治理协议，而不是强制所有执行环境采用单一技术实现。FPF 主研发机与开发者工作站广泛运行在 Windows 11 原生环境，涉及 Windows 专有工具链、NTFS 权限及本地桌面交互。追求架构规范绝不能以牺牲 Windows 11 原生环境的实际可用性为代价。同时，原生兼容性必须配备严格的安全与权限硬契约。
+FPF 的核心目标是统一治理协议，而不是强制所有执行环境采用单一技术实现。FPF 主研发机与开发者工作站广泛运行在 Windows 11 原生环境，涉及 Windows 专有工具链、NTFS 权限及本地桌面交互。追求架构规范绝不能以牺牲 Windows 11 原生环境的实际可用性为代价。同时，原生兼容性必须建立在严谨的威胁模型与受控权限契约之上，杜绝虚假的安全绝对化承诺。
 
 2.0 确立**三层执行后端架构（Three-Tier Execution Architecture）**：
 
@@ -441,24 +454,25 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
 3. **第三层：Ephemeral VM Runtime（高风险强隔离后端）**
    - **定位**：面向不可信第三方代码、系统内核级修改或高危自动化操作的强安全后端，后续按需引入。
 
-#### Windows 11 原生环境 DEV / QA 安全执行契约
+#### Windows 11 原生环境受控威胁模型与安全契约（F-04 & F-05）
 
-为解决宿主机同用户执行下的权限混淆与凭据泄露风险，Windows Local Worktree 必须执行以下硬性安全隔离规范：
+针对宿主机同用户执行可能导致的权限混淆、凭据泄露及进程残留风险，Windows Local Worktree 必须执行以下受控契约：
 
 1. **操作系统级身份隔离（OS Identity Separation）**：
    - 生产环境中，DEV Agent 与 QA Agent 必须运行在独立的非管理员 Windows 用户账户下（如 `fpf_dev_worker` 与 `fpf_qa_worker`）；
    - 禁止在特权管理员（Elevated Admin / UAC bypass）上下文运行 Agent 进程。
-2. **源码只读 ACL 硬防护（Read-Only ACL Enforcement）**：
+2. **源码只读 ACL 与外部证据存储（Read-Only ACL & External Storage）**：
    - 在 QA 任务启动时，系统通过 Windows NTFS ACL（如 `icacls`）将 DEV 工作树目录对 QA 账户显式标记为**严格只读（Read & Execute only）**，物理阻断 QA 修改被测代码的可能；
-   - QA 的测试产物与审计日志强制重定向至独立的专属凭证目录（如 `docs/vibe-evidence/` 或独立外部目录），DEV 账户对此目录无修改权限。
-3. **DPAPI 凭据安全与即时清零（Zero-Memory Credential Isolation）**：
-   - DPAPI 凭据解密权限仅授予专属的受保护凭据代理服务（Credential Broker）；
-   - 凭据仅以短时环境变量或内存管道形式注入目标进程，禁止落盘到 `.env`、日志或工作树；
-   - 任务结束、超时或异常退出时，凭据代理立即执行内存清零（SecureZeroMemory）并吊销临时令牌。
-4. **Windows Job Objects 进程树回收防逃逸（Process Tree Containment）**：
-   - 所有在 Windows 下拉起的 Agent 及其子进程，必须绑定到专有的 Windows Job Object；
-   - 显式配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，并设置安全策略禁止子进程设置 `CREATE_BREAKAWAY_FROM_JOB` 标志；
-   - 任务终止或超时时，关闭 Job Object 句柄即可 100% 根除所有孙子进程（如残留的 Node/Python/Git 僵尸进程）。
+   - **外部证据存储契约**：QA 的测试产物与审计日志**强制重定向至工作区外独立的受保护凭据存储卷**，DEV 账户对此目录无修改权限，严禁 QA 在被测仓库工作树内直接获得写入权限。
+3. **Credential Broker 临时令牌代理与内存生命周期（F-05）**：
+   - Agent 进程严禁持有长期持久化密钥（如 GitHub PAT），仅由外部守护的 Credential Broker 按任务签发最短生存期（如 15 分钟）的临时作用域令牌；
+   - 凭据优先通过命名管道或匿名 IPC 仅在调用瞬间按需传输，避免作为全局环境变量注入（防止子进程继承或写入 Crash Dump）；
+   - 凭据代理在使用完毕后对持有敏感数据的固定字节缓冲区执行 `SecureZeroMemory`，最大程度减少内存驻留窗口；严禁凭据写入磁盘或日志。
+4. **Windows Job Objects 进程树回收契约（F-04）**：
+   - **消除绝对化承诺**：在受支持的 Windows 环境及既定威胁模型下，通过 Windows Job Objects 施加严格的进程生命周期管理；
+   - **启动挂起绑定**：宿主使用 `CREATE_SUSPENDED` 标志创建初始进程，在将进程句柄显式分配给 Job Object 前禁止执行任何指令，杜绝加入前的逃逸竞态；
+   - **句柄防继承与防脱离**：Job Handle 设置为不可继承（`bInheritHandle = FALSE`），显式配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，且不授予 `JOB_OBJECT_LIMIT_BREAKAWAY_OK` 策略，从内核层拦截 `CREATE_BREAKAWAY_FROM_JOB`；
+   - **嵌套与终止验证**：支持 Windows 嵌套 Job 策略，确保终止信号逐级传递；该机制必须通过 Conformance Suite 中的专用进程树逃逸测试验证。
 5. **Tool Gateway 全面接管（Tool Gateway Interception）**：
    - 严禁 Agent 自由调用未经白名单审计的 Windows 系统命令或自动化浏览器；所有文件写操作、网络请求与外部工具调用统一经由 Tool Gateway 策略引擎鉴权。
 
@@ -470,7 +484,7 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
 | **Docker Sandbox** | 生产级实测（WSL2 引擎 / Docker Desktop） | 生产级实测（原生 Docker Engine） | 规范 Linux 容器与 Windows 宿主机之间的路径映射与权限转换 |
 | **文件系统与路径** | 兼容大小写不敏感、反斜杠/正斜杠兼容、NTFS 权限 | 大小写敏感、POSIX 权限模型、符号链接 | 核心协议内部全部使用规范化正斜杠 UTF-8 相对路径 |
 | **进程与生命周期** | Windows Job Objects 进程树严格回收，防 breakaway 逃逸 | POSIX 进程组与 cgroups 资源回收 | 超时或取消时必须保证子进程树被完全清理 |
-| **凭据与环境变量** | DPAPI + 内存清零，严禁落盘被测目录 | POSIX 环境变量与临时 tmpfs 挂载 | 无论平台，敏感 Token 与私钥一律禁止落盘到被测目录 |
+| **凭据与环境变量** | Broker 短期令牌 + 内存清零，严禁落盘被测目录 | POSIX 环境变量与临时 tmpfs 挂载 | 无论平台，敏感 Token 与私钥一律禁止落盘到被测目录 |
 | **网络边界防护** | Windows 本地防火墙规则 / Tool Gateway 统一接管 | iptables / 容器网络命名空间隔离 | 未授权的外部 IP/端口调用必须 Fail-Closed |
 | **崩溃状态恢复** | 进程异常终止后依据本地 SQLite 账本幂等恢复 | 容器退出或 SIGKILL 后幂等恢复 | 两端均执行统一对账与恢复协议 (Reconciliation) 决水机制 |
 
@@ -503,12 +517,12 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
 - 证据类型、适用 Profile 和覆盖的验收条件；
 - 来源证明、采集器版本和验证状态。
 
-### 7.2 证据评估模型、判定规则与完整治理生命周期解耦
+### 7.2 证据评估模型、量化门槛与全生命周期异常状态机（F-07 & F-08）
 
 **关键架构决策**：**严禁将人类授权的合并/发布（原 T5）归入 QA 证据可信等级**。
 “人类批准合并”是治理生命周期的状态跃迁，而不是技术证据的更高可信度。一个项目即使被人为合并，若其缺少独立测试凭据，其证据质量依然为零；反之，一个代码通过了严格独立 QA 认证的项目，即使人类决策暂缓合并，其证据可信度依然完备。将二者混淆在单条线性等级轴上属于概念错误。
 
-FPF 2.0 确立**五维证据评估模型（Five Dimensions of Evidence Quality）**，建立分级判定规则，并与**包含异常处理的完整治理生命周期状态机**正交解耦：
+FPF 2.0 确立**五维证据评估模型（Five Dimensions of Evidence Quality）**，建立可量化门槛，并与**完备的治理生命周期状态机**正交解耦：
 
 #### 1. 五维证据评估模型（Evidence Quality Dimensions）
 
@@ -517,35 +531,44 @@ FPF 2.0 确立**五维证据评估模型（Five Dimensions of Evidence Quality�
 | **Provenance（来源可信度）** | 证据由谁产生？来源是否经过平台签名与防篡改？ | 必须由平台认证的 Runner、采集器或独立主体签发，禁止接受不可追溯的匿名自由文本。 |
 | **Reproducibility（可复现性）** | 外部复测时能否在固定环境下按相同输入和命令复现结果？ | 必须记录固定的基线与测试 SHA、完整命令行、环境变量指纹及依赖锁定清单。 |
 | **Isolation（环境隔离度）** | 测试执行是否在有效隔离的受控环境中进行？ | 明确标识执行边界（非隔离本地进程、Git Worktree 目录隔离、Docker 容器隔离或独立 VM）。 |
-| **Independence（主体独立性）** | 验证主体与被测开发主体是否严格分离？ | QA 主体与 DEV 主体必须身份正交，QA 对被测源码严格只读，证据写入独立目录。 |
+| **Independence（主体独立性）** | 验证主体与被测开发主体是否严格分离？ | QA 主体与 DEV 主体必须身份正交，QA 对被测源码严格只读，证据写入独立外部存储。 |
 | **Coverage（验收覆盖率）** | 证据产出是否完整覆盖对应工作令的所有验收条件？ | 证据集必须与工作令中的 acceptance_criteria 形成逐项映射，缺失项一律标记为 `NOT_RUN`。 |
 
-#### 2. 任务风险驱动的证据最低要求矩阵（Profile Minimum Thresholds）
+#### 2. 任务风险驱动的量化证据门槛矩阵（F-08）
 
-五维证据不计算模糊的“平均分”，而是按工作令的风险 Profile 设定逐维硬门禁：
+五维证据不计算主观平均分，按 Profile 实行严格可量化的逐维硬门禁：
 
-| 任务 Profile | Provenance 要求 | Reproducibility 要求 | Isolation 要求 | Independence 要求 | Coverage 要求 |
+| 任务 Profile | 测试执行成功率 | 验收条款覆盖率 | 路径/边界合规率 | 环境隔离要求 | 主体独立性要求 |
 |---|---|---|---|---|---|
-| **Docs Profile（文档/规范）** | 平台认证采集器 | 固定 SHA 与链接可访问 | Local Worktree 即可 | 独立 QA 主体审查 | 100% 覆盖验收条款 |
-| **Library Profile（库/模块）** | 隔离 Runner 签名 | 自动化单测 100% 可复现 | Docker 或 Windows 只读 ACL | 独立 QA Runner | 单测覆盖 + 边界测试 |
-| **Full-Stack / Core Profile** | 平台实机 Artifact | 全量自动化回归 + E2E | 容器隔离或独立 OS 身份 | 独立 QA 主体 + Actions | 核心链路 100% 覆盖 |
-| **Release Profile（正式发布）** | 权威签名制品 | 生产级预演一致性 | 强隔离 VM 或受限环境 | 双独立主体签字 | 全量 Profile 绿灯 |
+| **Docs Profile（文档/规范）** | 100% 链接可达/无格式错误 | 100% 逐条对应证据 | 100% 严格限定在 allowed_paths | Local Worktree | 独立平台 QA 审查 |
+| **Library Profile（库/模块）** | 100% 单元测试通过 (0 Fail) | 100% 验收断言覆盖 | 100% 严格限定源码与测试路径 | Docker 或 Windows 只读 ACL | 独立 QA Runner |
+| **Core Profile（内核/架构）** | 100% 回归测试通过 (0 Fail) | 100% 验收条款 + 核心路径分支覆盖 | 100% 无禁止路径修改 | 容器隔离或独立 OS 账户 | 独立 QA 主体 + Actions 物理 Artifact |
+| **Release Profile（正式发布）** | 100% 全量套件与 E2E 绿灯 | 100% 覆盖全量功能矩阵 | 100% 零未提交/未跟踪文件 | 强隔离 VM 或受限预发实机 | 双独立主体签字 + 人类负责人授权 |
 
-#### 3. 包含异常处理的完整治理生命周期状态机（Lifecycle State Machine）
+#### 3. 完备的治理生命周期状态机与全阶段异常迁移规则（F-07）
 
-生命周期严格由确定性事件驱动，完备覆盖正常与异常分支，任何阶段不可凭自由文本跳跃：
+生命周期严格由确定性事件驱动，覆盖正常与异常分支，任何阶段不可凭自由文本跳跃：
 
 ```
-DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA_EVALUATING
-       │                                                      │
-       ├─[授权撤销]──> REVOKED                                ├─[测试环境无效]──> INVALID_TEST (重新准备)
-       │                                                      ├─[依赖阻塞]────> BLOCKED (挂起等待)
-       │                                                      │
-       │                              ┌───────────────────────┴───────────────────────┐
-       │                              ▼                                               ▼
-       │                        QA_VERIFIED (PASS)                              QA_FAILED (返工)
-       │                              │                                               │ (绑定失败证据与计数)
-       │                              ▼                                               ▼
+                              ┌─────────────────────────────────────────────────────────────┐
+                              │                      [全局授权撤销 / 漂移]                   │
+                              ▼                                                             │
+                       ┌──────────────┐                                                     │
+                       │   REVOKED    │ <───────────────────────────────────────────────────┤
+                       └──────────────┘                                                     │
+                              ▲                                                             │
+DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA_EVALUATING ────────────┤
+       │                                                      │                             │
+       │                                                      ├─[环境/命令无效]─> INVALID_TEST
+       │                                                      ├─[依赖冲突]────> BLOCKED     │
+       │                                                      │                    │        │
+       │                                                      │                    ▼ (对账恢复)
+       │                                                      │               DISPATCHED    │
+       │                              ┌───────────────────────┴───────────────────────┐     │
+       │                              ▼                                               ▼     │
+       │                        QA_VERIFIED (PASS)                              QA_FAILED   │
+       │                              │                                               │ (绑定失败制品与计数)
+       │                              ▼                                               ▼     │
        │                        HUMAN_APPROVED ──> MERGED ──> RELEASED          DEV_REWORK_LOOP
        │                              │                 │
        │                              ├─[人类否决]        └─[线上故障回滚]
@@ -553,10 +576,11 @@ DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA
        └───────────────────────> HUMAN_REJECTED        ROLLBACK
 ```
 
-- **QA_FAILED 深度绑定**：当独立 QA 判定为 FAIL 时，必须产出完整的失败报告、错误日志、被测固定 SHA 及当前 attempt 递增计数。DEV 返工必须基于该失败证据包展开，禁止凭空无痕修改。
-- **Reconciliation 状态与治理生命周期映射**：
-  - 当对账状态为 `UNKNOWN_OUTCOME` 或 `LOCAL_PENDING` 时，治理状态保持在 `DISPATCHED`，禁止向 `DEV_SUBMITTED` 跃迁；
-  - 当对账状态为 `REMOTE_CONFLICT` 时，治理状态立即被置为 `BLOCKED`，触发人工介入。
+- **REVOKED 全局撤销契约**：在 `DISPATCHED`、`DEV_SUBMITTED` 或 `INDEPENDENT_QA_EVALUATING` 等任意活动状态下，若人类发出撤销指令、工作令被修改或基线发生漂移，状态立即强制跃迁至 `REVOKED`。系统必须同步回收临时凭据、清理执行工作区，并将该工单的未完成产物永久废弃。
+- **BLOCKED 挂起与恢复规则**：进入 `BLOCKED` 后调度冻结。仅当对账协议决水成功或阻塞依赖解决后，生成 `UNBLOCKED` 事件恢复至 `DISPATCHED`。
+- **INVALID_TEST 重测规则**：因环境故障或测试脚本自身错误导致中断，状态置为 `INVALID_TEST`，打回调度层重新配置环境并再次进入 `INDEPENDENT_QA_EVALUATING`，**不计入 DEV 代码返工次数**。
+- **QA_FAILED 深度绑定与返工上限**：QA 判定失败必须绑定失败测试日志、固定测试 SHA 及递增的 attempt 计数。DEV 返工必须基于该失败证据包展开；若 attempt 超过工作令设定的重试上限（如 3 次），强制跃迁至 `HUMAN_RESOLUTION_REQUIRED`，防止无限返工死循环。
+- **HUMAN_REJECTED 与 ROLLBACK 规范**：人类否决后工单归档；合并或发布后若发生线上故障，必须由人类独立授权签发 `ROLLBACK` 工作令，记录反向提交 SHA 与回滚验证证据。
 
 #### 4. 向后兼容的执行记录标签（Historical Capture Tags）
 
@@ -565,7 +589,7 @@ DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA
 - **T1（本地观察与日志）**：本地进程输出日志，证明在本地环境发生过调用，不保证环境隔离与独立性。
 - **T2（确定性测试套件）**：固定本地环境中的自动化测试输出，证明代码符合既定断言。
 - **T3（隔离 Runner 与不可篡改 Artifact）**：在隔离 Runner 中执行产生、带有物理 SHA-256 哈希的制品包。
-- *注：原 T4（独立 QA）升级为独立的 `QA_VERIFIED` 治理状态与五维独立性审计；原 T5 升级为人类专属的 `HUMAN_APPROVED` 与 `MERGED` 治理行为。*
+- *注：原 T4（独立 QA）升级为独立的 `QA_VERIFIED` 治理状态与五维量化审计；原 T5 升级为人类专属的 `HUMAN_APPROVED` 与 `MERGED` 治理行为。*
 
 ### 7.3 风险驱动的 QA Profile
 
@@ -657,31 +681,31 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 - 更换治理后端不需要修改状态机核心。
 - 运行账本不能覆盖或伪造远端权威事实。
 
-### 阶段 2：Control Plane 与可靠协调（落地 Reconciliation Protocol）
+### 阶段 2：Control Plane 与可靠协调（落地对账恢复与 Transactional Outbox）
 
 **优先级：P0/P1｜2.0-alpha**
 
-目标：让任务可以安全派发、观测、恢复和有界重试，建立完备的重整决水能力。
+目标：让任务可以安全派发、观测、恢复和有界重试，落地 Transactional Outbox 与 Provider 幂等分级对账协议。
 
 交付物：
 
 1. 统一 Dispatcher、Scheduler、Reconciler 和任务队列接口。
-2. 落地正式的 **Reconciliation Protocol**，定义确定性决水状态机（REMOTE_CONFIRMED, LOCAL_PENDING, UNKNOWN_OUTCOME, REMOTE_CONFLICT, REMOTE_UNAVAILABLE, HUMAN_RESOLUTION_REQUIRED）。
-3. 统一 Request ID、Attempt ID、Idempotency Key、Causation ID、Receipt 和 Observation。
-4. 实现发送意图先持久化、幂等派发、探针决水和外部未知副作用（`UNKNOWN_OUTCOME`）恢复算法。
-5. 统一 Runtime 与 Dispatch 的生命周期事件流与因果序列。
-6. 建立并发锁、超时、取消、退避、熔断和人工接管机制。
-7. 接入 GitHub 参考后端，形成权威字段映射与可复核的完整任务状态流。
+2. 落地正式的**对账与恢复协议（Reconciliation Protocol）**，支持 Provider Class A/B/C 三级幂等分级与 60 秒探针退避决水机制。
+3. 落地 **Transactional Outbox 模式**，在同一个原子事务中完成 CAS 版本比对、事件落盘与发件箱写入。
+4. 统一 Request ID、Attempt ID、Idempotency Key、Causation ID、Receipt 和 Observation。
+5. 实现外部未知副作用（`UNKNOWN_OUTCOME`）恢复算法，执行 `NOT_FOUND ≠ PROVEN_NOT_EXECUTED` 延迟窗口校验。
+6. 统一 Runtime 与 Dispatch 的生命周期事件流，执行 `PROJECTION_ONLY` 回放零副作用硬防护。
+7. 建立并发锁、超时、取消、退避、熔断和人工接管机制。
+8. 接入 GitHub 参考后端，形成权威字段映射（严格校验 Review Commit SHA）与可复核的任务流。
 
 验收条件：
 
 - 进程在派发前后、回执前后和轮询过程中中断，恢复后**严禁盲目重复发送**，必须通过探针决水。
+- 数据库提交后进程崩溃不丢事件，通过 Outbox 保证 At-Least-Once 投递与下游幂等消费。
 - 状态推进必须重新读取并验证规范事实；本地账本与远端冲突时触发 `REMOTE_CONFLICT` 阻断。
-- QA FAIL 只能触发有界返工；QA PASS 只能到达人工合并门禁。
+- QA FAIL 深度绑定失败日志与 SHA，受最大重试次数约束；QA PASS 只能到达人工合并门禁。
 - 未确认的取消、未知回执和外部服务异常必须阻断并要求执行 Reconciliation Protocol。
 - 至少完成一次真实 DEV → 独立 QA → FAIL → DEV 返工 → PASS → 人工合并门禁的端到端演练。
-
-**当前关联：** Issue #61 / Draft PR #62。该项应先完成独立审查、主干基线集成和真实 Provider Smoke，不应仅因接口与离线测试通过就视为阶段完成。
 
 ### 阶段 3：Portable Execution Runtime（三层后端与跨平台支持）
 
@@ -795,69 +819,66 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 
 ---
 
-## 9. 五类资产与三大产品发行体系及版本兼容策略
+## 9. 五类资产、三大产品双向验证体系与版本兼容矩阵（F-09）
 
-为明确 FPF 的商业与开源发行形态，FPF 将五类工程资产归入三大独立演进的正式产品线：
+为明确 FPF 的商业与开源发行形态，FPF 将五类工程资产归入三大独立演进的正式产品线，并建立双向验证闭环：
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│ 1. FPF Standard（五权治理标准库）                                        │
-│    - 资产：RFC / Protocol 规范文档、JSON Schemas、核心事件与状态契约     │
-│    - 定位：中立、公开、跨平台的治理标准定义，不依赖具体编程语言或模型       │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │ 约束与遵循
-                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ 2. FPF Reference Runtime（参考执行运行时）                               │
-│    - 资产：Core Kernel、Control Plane、三层 Runner、Tool Gateway、适配器   │
-│    - 定位：标准的官方参考实现（Python/CLI），提供单机到分布式调度能力      │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │ 验证与验收
-                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ 3. FPF Conformance（符合性验证套件）                                     │
-│    - 资产：Conformance Suite CLI、Mock Provider、五维证据验证器、评测包    │
-│    - 定位：用于核验第三方项目或适配器是否符合 FPF 标准的权威测试工具      │
-└────────────────────────────────────────────────────────────────────────┘
+                              ┌──────────────────────────────────────────────┐
+                              │ 1. FPF Standard（五权治理标准库）              │
+                              │    - 规范文档 (RFC)、JSON Schemas、事件契约   │
+                              │    - 中立定义产品边界、权限模型与数据契约      │
+                              └──────┬───────────────────────────────▲───────┘
+                                     │                               │
+                        规范遵循约束 │                               │ 独立验证元模式与规范自洽
+                                     ▼                               │
+┌──────────────────────────────────────────────┐                     │
+│ 2. FPF Reference Runtime（参考执行运行时）   │                     │
+│    - Core Kernel、Control Plane、三层 Runner │                     │
+│    - 官方参考实现（Python/CLI），提供调度执行│                     │
+└──────────────────────┬───────────────────────┘                     │
+                       │                                             │
+          实现合规校验 │                                             │
+                       ▼                                             │
+┌────────────────────────────────────────────────────────────────────┴───────┐
+│ 3. FPF Conformance（符合性验证套件）                                         │
+│    - Conformance CLI、固定 Mock Provider、五维证据验证器、合规报告生成器     │
+│    - 双向独立验证：既验证 Standard 规范自洽性，又验证 Runtime 实现合规性   │
+│                                                                            │
+│    [附属评测包] FPF Agent Evaluation Framework                              │
+│    - 独立评测大模型在 Agent 提示词下的行为稳定性与可靠度统计指标           │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 产品版本兼容矩阵（Version Compatibility Matrix）
+#### 产品版本多维兼容矩阵（Multi-Dimensional Compatibility Matrix）
 
-| 资产类型 | 归属产品 | 版本策略 | 兼容性约束与迁移原则 |
-|---|---|---|---|
-| **Protocol / RFC** | FPF Standard | 规范版本（如 `2.0.0`） | 语义冻结，破坏性变更必须发布新 RFC 并提供迁移指引 |
-| **JSON Schemas** | FPF Standard | `schema_version` | 字段严格向后兼容，移除字段必须升级主版本 |
-| **Kernel / Runtime** | FPF Reference Runtime | SemVer（如 `2.0.0-rc1`） | 实现 FPF Standard 契约；API 废弃必须至少保留一个小版本周期 |
-| **Adapters** | FPF Reference Runtime | `adapter_version` + `capabilities` | 显式声明兼容的 Standard 版本与支持的能力集，禁止隐式降级 |
-| **Conformance CLI** | FPF Conformance | `suite_version` | 严格绑定对应的 FPF Standard 版本，测试断言保持确定性 |
-| **Agent Eval Pack** | FPF Conformance | `eval_dataset_version` | 独立版本化，评测基线变更不影响系统 Conformance 结果 |
+| Standard 版本 | 兼容的 Schema 版本 | 支持的 Runtime 版本 | 适用的 Conformance Suite | 兼容策略与迁移说明 |
+|---|---|---|---|---|
+| **2.0.x** | `draft-2026-10-31` / `v2.0` | `2.0.0-alpha` ~ `2.0.x` | `v2.0.x` | 基础标准基线，严格向下兼容所有 2.0.x 补丁版本 |
+| **2.1.x** (规划) | `v2.1` | `2.1.0`+ (可向下兼容 2.0) | `v2.1.x` (兼容 2.0 套件) | 引入生产反馈扩展，保持核心五权与事件契约不变 |
 
 兼容性铁律：
-- **数字相同不等于天然兼容**：例如 Reference Runtime 2.1.0 必须声明其向下兼容 FPF Standard 2.0.0 与 2.1.0。
+- **版本号相同不等于天然兼容**：Reference Runtime 发布包必须在 Manifest 中显式声明：`supported_standard_versions: ["2.0.0", "2.0.1"]`；未声明的版本一律拒绝初始化。
 - **核心契约中立**：核心协议严禁引入单一商业 Provider 的私有字段或非标调用。
 - **显式能力降级防护**：Adapter 未声明的能力调用必须直接抛出 `UNSUPPORTED_CAPABILITY` 异常，严禁静默空转。
 
----
-
-## 10. FPF 2.0 稳定版验收标准
+## 10. FPF 2.0 稳定版验收标准（架构基线冻结指标）
 
 只有同时满足以下条件，才可以对外声明 FPF 2.0 Stable：
 
-1. 五权治理原则、核心状态机、事件因果模型（含 UUIDv7 时间排序、sequence 严格单调、原子 CAS 并发控制与 `PROJECTION_ONLY` 回放零副作用）和数据契约形成正式规范。
+1. 五权治理原则、核心状态机、事件因果模型（含 UUIDv7 时间排序、sequence 严格单调、原子 CAS 并发校验、Transactional Outbox 原子事务发件箱与 `PROJECTION_ONLY` 回放零副作用）和数据契约形成正式规范。
 2. 治理后端、Agent Provider、Runner、Tool Gateway 和 Evidence Store 均有稳定接口与确定性契约测试。
 3. GitHub 参考后端完成授权、任务、Review（严格绑定 Commit SHA）、Artifact 和生命周期全链路验证。
-4. 落地正式的**对账与恢复协议（Reconciliation Protocol）**，支持 Provider 三级分级（Class A/B/C）、60 秒探针退避决水机制，在崩溃恢复时**杜绝盲目重发**。
+4. 落地正式的**对账与恢复协议（Reconciliation Protocol）**，支持 Provider 三级分级（Class A/B/C）、60 秒带抖动探针退避决水机制，严格执行 `NOT_FOUND ≠ PROVEN_NOT_EXECUTED` 延迟窗口，在崩溃恢复时**杜绝盲目重发**。
 5. Local Worktree（Windows 11 原生生产级一级支持）与 Docker Sandbox 均完成生产级实机执行与崩溃恢复验证。
-6. Windows 11 原生环境落实严格安全契约：DEV/QA 独立操作系统账户、源码只读 ACL 硬防护、DPAPI 内存清零及 Job Objects 进程防逃逸。
-7. 任务状态只能由可信事实和确定性 Reducer 推进，治理生命周期完备支持 `BLOCKED`、`QA_FAILED`（绑定失败制品与计数）及 `ROLLBACK` 等全异常跃迁。
-8. Evidence Engine 基于五维证据模型（Provenance、Reproducibility、Isolation、Independence、Coverage）与 Profile 最低要求矩阵验证来源、完整性与验收覆盖。
+6. Windows 11 原生环境落实受控威胁模型：DEV/QA 独立操作系统账户、源码只读 ACL 硬防护、Credential Broker 短期令牌注入、DPAPI 内存清零及 Job Objects 进程防逃逸。
+7. 任务状态只能由可信事实和确定性 Reducer 推进，治理生命周期完备支持全局 `REVOKED` 立即中断、`BLOCKED`、`INVALID_TEST`、`QA_FAILED`（绑定失败制品与计数）及 `ROLLBACK` 等全异常跃迁。
+8. Evidence Engine 基于五维证据模型（Provenance、Reproducibility、Isolation、Independence、Coverage）与 Profile 量化门槛矩阵（100% 测试成功率、100% 验收覆盖率）验证来源、完整性与验收覆盖。
 9. **FPF Conformance Suite** 具备基于声明能力集（Declared Capabilities）的确定性硬门禁判定能力，并与概率性 **Agent Evaluation** 严格分轨，独立出具报告。
 10. Bootstrap 能在干净的第三方仓库完成初始化，并通过 Doctor 和 Conformance 验收。
 11. Windows 11 与 Ubuntu 的跨平台兼容矩阵均有对应实机测试记录（路径规范、进程树回收、权限映射）。
-12. FPF Standard、Reference Runtime 与 Conformance 三大产品发布线及版本兼容矩阵完全清晰一致。
+12. FPF Standard、Reference Runtime 与 Conformance 三大产品双向验证体系及多维版本兼容矩阵完全清晰一致。
 13. 合并和部署的最终决策权始终由人类保留，无凭据泄露或自动化旁路。
-
----
 
 ## 11. 优先级与依赖关系
 
