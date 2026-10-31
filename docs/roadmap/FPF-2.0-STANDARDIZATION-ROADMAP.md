@@ -426,18 +426,22 @@ Outbox Dispatcher 独立轮询或监听 Outbox 表 ──> 保证 At-Least-Once 
 
 -- 5. 下游订阅者独立 Inbox 幂等消费契约（C-02 本地事务与唯一约束）
 -- consumer_inbox 表定义：PRIMARY KEY (consumer_name, event_id)
--- 消费端必须将“业务投影写入”与“插入 consumer_inbox”置于同一个本地数据库事务中：
+-- 消费端必须将“业务投影写入”与“插入 consumer_inbox”置于同一个本地数据库事务中；
+-- 严禁将 SELECT EXISTS 充当并发排他锁，直接依赖主键唯一约束原子排他：
 BEGIN TRANSACTION;
-  -- 检查消费去重记录（或依赖主键冲突拦截）
-  IF EXISTS (SELECT 1 FROM consumer_inbox WHERE consumer_name = :c_name AND event_id = :e_id) THEN
-    COMMIT; -- 已消费过，直接幂等成功 ACK
-  ELSE
-    -- 执行具体的业务投影或状态转换更新
-    UPDATE task_projections SET ... WHERE ...;
-    -- 记录消费凭据
-    INSERT INTO consumer_inbox (consumer_name, event_id, processed_at) VALUES (:c_name, :e_id, :current_timestamp);
-    COMMIT; -- 原子提交业务与去重记录
-  END IF;
+  SAVEPOINT before_consumption;
+  -- 尝试原子插入消费凭据（若并发消费者同时处理，由数据库内核级唯一约束排他拦截）
+  INSERT INTO consumer_inbox (consumer_name, event_id, processed_at)
+  VALUES (:c_name, :e_id, :current_timestamp);
+
+  -- 插入成功说明该消费者首次处理该事件，原子执行业务投影更新
+  UPDATE task_projections SET ... WHERE ...;
+  RELEASE SAVEPOINT before_consumption;
+  COMMIT;
+EXCEPTION WHEN UNIQUE_VIOLATION THEN
+  -- 捕获到唯一键冲突，说明并发消费者已抢先处理或此前已完成消费
+  ROLLBACK TO SAVEPOINT before_consumption;
+  COMMIT; -- 回滚业务投影，直接向总线返回幂等 ACK，避免重复执行副作用
 ```
 
 **关键架构隔离铁律**：
@@ -502,10 +506,11 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
    - 在 QA 任务启动时，系统通过 Windows NTFS ACL（如 `icacls`）将 DEV 工作树目录对 QA 账户显式标记为**严格只读（Read & Execute only）**，物理阻断 QA 修改被测代码的可能；
    - **外部证据存储契约**：QA 的测试产物与审计日志**强制重定向至工作区外独立的受保护凭据存储卷**，DEV 账户对此目录无修改权限，严禁 QA 在被测仓库工作树内直接获得写入权限。
 3. **Credential Broker 认证代理与安全生命周期（F-05 & C-04）**：
-   - **IPC 客户端身份认证与 PID 生命周期防重用**：Credential Broker 仅通过本地命名管道（Named Pipe）提供临时凭据服务；管道配置严密安全描述符（SDDL）。调用 `GetNamedPipeClientProcessId` 取得客户端 PID 后，必须通过 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 获取进程句柄，核验进程的创建时间戳（`GetProcessTimes`），严格防止 PID 发生回收重用攻击；
-   - **Job Object 归属核验**：通过 `IsProcessInJob` 严格校验该进程句柄确实隶属于宿主为当前任务派发的受控 Job Object 实例；
+   - **IPC 客户端身份认证与宿主预期四元组严格对账**：Credential Broker 仅通过本地命名管道（Named Pipe）提供临时凭据服务；管道配置严密安全描述符（SDDL）。宿主超级守护进程在派发 Worker 进程时，必须在 Broker 权威授权注册表中预先登记合法的执行四元组：`(expected_pid, expected_creation_time, task_id, job_handle)`；
+   - **防 PID 回收重用与创建时间核验**：Broker 收到连接时，调用 `GetNamedPipeClientProcessId` 取得客户端 PID 后，必须通过 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 获取进程句柄，调用 `GetProcessTimes` 读取实际创建时间戳 `actual_creation_time`，并与宿主预先登记的时间戳进行严格双向比对：`actual_pid == expected_pid AND actual_creation_time == expected_creation_time`。若时间戳失配或进程已被替换，立即拒绝连接，彻底杜绝 PID 回收重用攻击；
+   - **Job Object 归属核验**：通过 `IsProcessInJob` 严格校验该进程句柄确实隶属于宿主为当前任务派发且在注册表中绑定的 `job_handle` 实例；
+   - **细粒度任务级授权绑定（Task-Bound Scope Grant）**：请求载荷中的 Task ID 必须与注册表中该进程绑定的 `task_id` 100% 严格一致，严禁跨任务冒用；进一步核验 Audience、具体 API Scope、任务生命周期状态以及当前撤销版本（Revocation Version）；
    - **模拟失败即时 Fail-Closed 与 RevertToSelf**：调用 `ImpersonateNamedPipeClient` 执行安全上下文模拟；**若身份模拟失败（返回值 FALSE），服务端绝对禁止以 Broker 自身高权限继续执行后续请求**，必须立即 Fail-Closed 抛出安全异常并断开管道；在模拟检查完成后及任何退出分支，必须强制调用 `RevertToSelf` 恢复自身安全上下文，杜绝特权残留；
-   - **细粒度任务级凭据授权绑定（Task-Bound Scope Grant）**：连接建立仅完成进程身份初步认证，Broker 必须在每次请求载荷中严格核验任务级凭据授权：验证 Task ID、Audience、具体 API Scope、任务生命周期状态以及当前撤销版本（Revocation Version）；
    - **短期作用域令牌与内存清零**：Agent 进程严禁持有长期持久化密钥（如 GitHub PAT），仅由 Broker 按任务签发限定 Audience、限定 Scope、最短生存期（TTL ≤ 15 分钟）的临时令牌；任务撤销（`REVOKED`）或超时时 Broker 立即远程吊销并在本地失效；固定缓冲区使用后调用 `SecureZeroMemory`；
    - **Broker 反向代理与操作级审计优先原则**：对于 GitHub API、远端制品存储上传等标准外部调用，优先由 Broker 作为受保护的反向代理直接代为发起调用，不仅验证连接发起者，更对发出的每个具体 HTTP/API 操作进行白名单路径、动作与参数级深度审计，仅将结果返回给 Agent，最大程度避免凭据实体暴露于 Worker 内存空间；
    - **非标准进程创建逃逸测试**：Job Object 默认管理通过 `CreateProcess` 创建的子进程，但通过 WMI（`Win32_Process.Create`）或 RPC 机制发起的跨上下文进程创建无法自动继承 Job 关联，必须在安全策略中审计并禁止 Worker 调用此类接口，并将其列入 Conformance 专用逃逸测试。
@@ -514,11 +519,14 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
    - **挂起启动与入组失败硬防护**：宿主使用 `CREATE_SUSPENDED` 标志调用 `CreateProcess` 创建初始进程，并立即调用 `AssignProcessToJobObject`；**若绑定失败，宿主必须立即调用 `TerminateProcess` 强制销毁进程并拒绝启动，严禁在未成功加入 Job Object 前调用 `ResumeThread`**，彻底消除加入前的逃逸竞态；
    - **句柄权属与防跨进程复制**：Job Handle 仅由宿主超级守护进程持有，设置 `bInheritHandle = FALSE`，并通过安全描述符禁止子进程复制或打开 Job 句柄；显式配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，且不授予 `JOB_OBJECT_LIMIT_BREAKAWAY_OK` 策略，从内核层拦截 `CREATE_BREAKAWAY_FROM_JOB`；
    - **嵌套与终止验证**：支持 Windows 嵌套 Job 策略，确保终止信号逐级传递；该机制必须通过 Conformance Suite 中的专用进程树逃逸测试验证。
-5. **Windows 过滤平台（WFP / ALE）用户级出站隔离契约（F-04 & C-03）**：
-   - **区分全局配置与用户层过滤**：标准 Windows 高级防火墙的 `DefaultOutboundAction` 属于设备/网络配置文件（Domain/Private/Public）全局策略，默认通常为 Allow，无法单凭普通防火墙规则直接为特定本地用户设定独立的默认出站动作；
-   - **基于 WFP 应用层强制（ALE）用户 SID 过滤**：宿主通过 Windows Filtering Platform（WFP）底层的 ALE（Application Layer Enforcement）连接层/授权层驱动规则，依据 Worker 账户的用户安全标识符（User SID，如 `fpf_dev_worker` 与 `fpf_qa_worker`）建立用户级出站拦截过滤器（`FWPM_CONDITION_ALE_USER_ID`）；
-   - **默认丢弃与白名单放行**：对命中 Worker SID 的所有出站连接默认施加丢弃（Block / Drop），仅精确放行目标为本地 Tool Gateway 监听端点（限定本地 IP 如 `127.0.0.1` 及指定监听端口 `49152`，并核验 Tool Gateway 宿主应用二进制哈希）的合法连接；
-   - **消除回环与协议旁路**：严格拦截 Worker 进程对宿主机其他本地监听服务、IPv6 回环地址（`::1`）及未授权接口的探测与直连；
+5. **Windows 过滤平台（WFP / ALE）全层网络出站隔离契约（F-04 & C-03）**：
+   - **区分全局配置与内核过滤层**：标准 Windows 高级防火墙的 `DefaultOutboundAction` 属于设备/网络配置文件（Domain/Private/Public）全局策略，默认通常为 Allow，无法单凭普通防火墙规则直接为特定本地用户设定独立的默认出站动作；
+   - **精确绑定 WFP ALE 与 Transport 过滤层**：宿主通过 Windows Filtering Platform（WFP）底层的 ALE 与传输层驱动，依据 Worker 账户的用户安全标识符（User SID，如 `fpf_dev_worker` 与 `fpf_qa_worker`）建立跨网络层出站拦截规则集：
+     1) ALE 连接授权层（`FWPM_LAYER_ALE_AUTH_CONNECT_V4` 与 `FWPM_LAYER_ALE_AUTH_CONNECT_V6`）：拦截所有出站 TCP 握手与 UDP 首次连接请求；
+     2) ALE 资源分配层（`FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4` 与 `_V6`）：严格禁止 Worker 进程在未授权端口上创建监听端点；
+     3) 传输层（`FWPM_LAYER_OUTBOUND_TRANSPORT_V4` 与 `_V6`）：拦截 ICMP 请求与非标准 Raw Sockets 绕过尝试；
+   - **默认丢弃与白名单放行**：对命中 Worker SID 的所有过滤层流量实施默认丢弃（Block / Drop），仅精确放行目标为本地 Tool Gateway 监听端点（限定本地 IPv4 `127.0.0.1` 及指定监听端口 `49152`，并核验 Tool Gateway 宿主应用二进制哈希）的 TCP 连接；
+   - **消除本地与回环旁路**：严格拦截 Worker 进程对宿主机其他本地监听服务、IPv6 回环地址（`::1`）及未授权接口的探测与直连；
    - **非标准网络与进程创建审计**：审计并禁止 Worker 账户直接调用非标准 Winsock raw socket 或隐式浏览器连接，确保所有外部出站流量 100% 物理受限于 Tool Gateway。
 6. **Tool Gateway 全面接管（Tool Gateway Interception）**：
    - 严禁 Agent 自由调用未经白名单审计的 Windows 系统命令或自动化浏览器；所有文件写操作、网络请求与外部工具调用统一经由 Tool Gateway 策略引擎鉴权。
@@ -634,10 +642,16 @@ DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA
        │                    MERGED        ARCHIVED ──────────────────────> HUMAN_RESOLUTION_REQUIRED
        │                      │                                                       ▲
        │                      ▼ (线上故障回滚)                                        │ (回滚执行失败)
-       │              ROLLBACK_WORK_ORDER ──> ROLLBACK_EXECUTING ──> ROLLBACK_QA ─────┘
+       │              ROLLBACK_WORK_ORDER ──> ROLLBACK_EXECUTING ──> ROLLBACK_QA_EVALUATING
        │                                                              │ (QA PASS)
        │                                                              ▼
-       │                                                          ROLLED_BACK
+       │                                                    ROLLBACK_QA_VERIFIED
+       │                                                              │ (人类授权)
+       │                                                              ▼
+       │                                                   ROLLBACK_HUMAN_APPROVED
+       │                                                              │ (主干合入)
+       │                                                              ▼
+       │                                                         ROLLED_BACK
 ```
 
 **全阶段异常分支契约**：
@@ -667,10 +681,14 @@ DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA
      - `CANCEL_CONFLICT`：取消与完成发生并发竞争，对账引擎必须重新对账并核验产物哈希，严禁丢弃已生成的有效制品。
 7. **ROLLBACK 完整治理生命周期契约（Full Rollback Lifecycle - C-05）**：
    - 触发条件：已合入（`MERGED`）或发布（`RELEASED`）的代码发生重大线上故障，必须由人类负责人签发正式的 `ROLLBACK_WORK_ORDER`；
-   - 状态流转：`ROLLBACK_WORK_ORDER` 启动后进入 `ROLLBACK_EXECUTING`，生成明确的反向 Git Commit SHA；
-   - 独立验证门禁：回滚提交严禁直接合入 main，必须同样经过独立 QA Runner 执行回归测试并生成 `ROLLBACK_QA_VERIFIED` 物理证据包；
-   - 异常接管：若回滚执行发生合并冲突或测试未通过，系统绝对禁止反复自动重试，必须立即跃迁至 `HUMAN_RESOLUTION_REQUIRED`，冻结变更并转入人工紧急接管；
-   - 终态确认：独立 QA PASS 且人类签署后合入主干，状态标记为 `ROLLED_BACK` 并同步至项目地图。
+   - 规范统一状态流转体系：
+     `ROLLBACK_WORK_ORDER`（人类签发回滚令，状态为 `DISPATCHED`）
+     ──> `ROLLBACK_EXECUTING`（生成明确的反向 Git Commit SHA）
+     ──> `ROLLBACK_QA_EVALUATING`（独立 QA Runner 执行回归测试）
+     ──> `ROLLBACK_QA_VERIFIED`（独立 QA 验证通过，产出物理回滚证据包）
+     ──> `ROLLBACK_HUMAN_APPROVED`（人类负责人签署回滚合入授权）
+     ──> `ROLLED_BACK`（反向 Commit 合入主干，状态终态归档）；
+   - 异常接管：若回滚执行发生合并冲突或 QA 测试未通过，系统绝对禁止反复自动重试，必须立即跃迁至 `HUMAN_RESOLUTION_REQUIRED`，冻结变更并转入人工紧急接管。
 
 #### 4. 向后兼容的执行记录标签（Historical Capture Tags）
 
