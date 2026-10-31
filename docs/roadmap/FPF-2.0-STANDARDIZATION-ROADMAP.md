@@ -308,7 +308,7 @@ Runtime Ledger 与 PR #62 中的 Dispatch Journal 不应简单合并，也不能
 | 能力等级 | Provider 特征 | 适用系统恢复策略与硬性防重约束 |
 |---|---|---|
 | **Class A（原生幂等）** | 原生支持 `idempotency_key` 过滤 | 允许自动重发，但**必须同时满足以下硬性契约（F-01）**：<br>1. **三要素严格匹配**：重发必须使用原始 `idempotency_key`；请求体规范化摘要 `canonical_payload_digest` 必须 100% 严格一致（Key 相同但 Payload 改变时 Provider 必须抛出 `IDEMPOTENCY_CONFLICT` 拒绝）；处于 Provider 声明的有效保留期（Retention Period）内。<br>2. **显式幂等作用域（Idempotency Scope）**：Provider 必须显式声明 Key 的唯一性作用域（如 `Tenant` 租户级、`Endpoint` 路由级、`Session` 会话级或 `Workspace` 工作区级），禁止跨作用域冲突误判。<br>3. **并发请求去重语义（Concurrent Deduplication）**：当两个携带相同 Key 的请求并发到达时，Provider 必须原子互斥锁定，**保证只创建一个逻辑执行实例**，并发调用者挂起等待同一执行实例生成回执或订阅同一结果，严禁并发穿透。<br>4. **保留期起算点权威定义（Retention Semantics）**：Retention Period 必须以 Provider 正式生成并持久化首次回执的时间戳（Receipt Timestamp）为基准起算，禁止客户端主观猜测。 |
-| **Class B（可查不可防重）** | 不支持请求去重，但提供任务查询接口（可查 Request ID 历史） | **严禁直接重发**；明确铁律 **`NOT_FOUND ≠ PROVEN_NOT_EXECUTED`**。<br>受最终一致性延迟影响，只有在满足以下条件时方可裁决为“未执行并安全重发”（F-02）：<br>1. **可见性延迟窗口（Visibility Delay Window）**：Provider 必须正式声明最大可见性延迟上限（如 30 秒），起算点以客户端首发请求发送完成时间戳 `sent_at` 为准（叠加网络传输容限）；<br>2. **查询接口一致性保障**：在延迟窗口过后多次查询均稳定返回 `NOT_FOUND`，且 Provider 官方承诺查询接口的一致性等级 SLA；<br>3. **负向观察时效（Negative Observation Validity）**：`NOT_FOUND` 判定仅在当前探针周期内有效；若超过可见性窗口依然因超时或网络抖动无法确认，**绝对禁止推断为未执行**，必须保持 `UNKNOWN_OUTCOME`，直至升级人类介入。 |
+| **Class B（可查不可防重）** | 不支持请求去重，但提供任务查询接口（可查 Request ID 历史） | **硬性安全铁律**：**无法证明远端绝对未执行，就绝对不能把未发现远端记录（`NOT_FOUND`）当作未执行；严禁为了提高自动化率牺牲外部副作用安全性！**（C-01 & F-02）<br>受网络单向延迟与最终一致性影响，仅凭客户端 `sent_at` 与查询接口返回 `NOT_FOUND` **仍不足以证明远端绝对未接收执行**（请求可能因网络延迟滞留于链路中，导致后续重发引发双实例冲突）。因此，**只有当 Provider 同时满足以下三项强保证时，才允许在探针期满后自动重发**：<br>1. **权威接收时间界限与单向延迟保证**：Provider 具备权威时间戳同步机制，并能给出严格的接收延迟上限保障；<br>2. **查询接口强一致性 SLA 与可见性窗口**：Provider 承诺可见性延迟窗口（Visibility Delay Window，如 30s）后，历史记录查询具有强一致性（Strong Consistency / Read-After-Write SLA）；<br>3. **迟到请求防护与丢弃机制（Late-Arriving Request Drop Mechanism）**：Provider 服务端具备基于请求时间戳或有效期的迟到请求自动丢弃能力（例如请求头携带 `X-Request-Expires-At`，若请求因网络延迟到达超过有效期，Provider 拒绝执行而不是创建新任务）。<br>**降级规则**：凡 Provider **不能提供上述完整接收界限与迟到防护保证者，一律严禁自动重发**；多次查询返回 `NOT_FOUND` 时一律强制降级为 `UNKNOWN_OUTCOME`，终止自动调度，持久化现场证据并升级至 `HUMAN_RESOLUTION_REQUIRED` 由人工核验！ |
 | **Class C（无查询无幂等）** | 既不支持去重也不提供可信执行历史查询接口 | 发生未知中断时一律强制置为 `UNKNOWN_OUTCOME`，**绝对禁止自动重发**，仅允许保存现场证据并直接升级人类接入。 |
 
 #### 3. 探针恢复算法与超时退避预算（Probe Recovery Algorithm）
@@ -317,10 +317,10 @@ Runtime Ledger 与 PR #62 中的 Dispatch Journal 不应简单合并，也不能
 - **只读零副作用契约**：探针仅调用只读查询接口（如 `check_status`、`query_request_receipt`），严禁触发任何产生新任务的写操作。
 - **指数退避与抖动预算**：探测间隔按 2s、4s、8s、16s 指数退避并加入随机抖动（Jitter，±20%），最大单次请求超时 5s，总探测超时预算硬性设定为 60 秒。
 - **探针预算与可见性窗口协同**：60 秒探针总超时预算必须严格大于 Provider 声明的最大可见性延迟窗口（如 30 秒），最后一次探针尝试的截止时间必须落在可见性窗口之外，确保判定安全性。
-- **决水与超时升级**：
+- **决水与超时升级（C-01 严格受限重发契约）**：
   - 若在预算时间内探针核实任务已成功接收并生成回执，状态平滑跃迁至 `REMOTE_CONFIRMED` 并按远端执行子状态推进（`REMOTE_ACCEPTED` 等待轮询，`REMOTE_RUNNING` 恢复观测）；
-  - 若经过完整可见性延迟窗口后探针核实任务确未被外部接收，状态置为 `LOCAL_PENDING` 并安全重新派发；
-  - 若超过 60 秒依然无法确定外部副作用结果，立即强制跃迁至 `HUMAN_RESOLUTION_REQUIRED`，冻结任务推进，杜绝无限悬挂。
+  - 若探针核实任务未被接收，**仅在 Provider 具备 Class A 原生幂等或具备 Class B 权威接收界限与迟到防护保证时**，方可将状态置为 `LOCAL_PENDING` 并安全重新派发；
+  - 若为普通 Class B/Class C Provider 或超过 60 秒依然无法排除迟到与执行未知，立即强制跃迁至 `HUMAN_RESOLUTION_REQUIRED`，冻结任务推进，杜绝无限悬挂与双写副作用。
 
 #### 4. 细化权威字段映射与版本合法性校验
 
@@ -384,11 +384,11 @@ FPF 2.0 至少应统一以下规范对象：
 - `payload_digest`：事件载荷的 SHA-256 哈希摘要，保障事件防篡改。
 - `replay_policy`：事件回放策略枚举（`PROJECTION_ONLY` 为强制默认策略，运行时物理阻断外部副作用）。
 
-#### 原生条件更新 CAS 与 Transactional Outbox 事务契约（F-06）
+#### 原生条件更新 CAS 与 Transactional Outbox 事务契约（F-06 & C-02）
 
-为彻底消除“数据库版本已提交但事件发布失败导致下游丢事件”或“普通并发读取导致状态覆盖”的双写与竞态故障窗口，事件引擎必须实现基于原生条件更新的 Transactional Outbox 契约：
+为彻底消除“数据库版本已提交但事件发布失败导致下游丢事件”或“普通并发读取导致状态覆盖”的双写与竞态故障窗口，事件引擎必须实现基于原生条件更新与确定性 sequence 分配的 Transactional Outbox 契约：
 
-```
+```sql
 BEGIN TRANSACTION;
   -- 1. 原生原子条件更新（Atomic Conditional Update，消除 SELECT 与 UPDATE 竞态窗口）
   UPDATE task_aggregates
@@ -403,11 +403,20 @@ BEGIN TRANSACTION;
     RAISE CONCURRENCY_CONFLICT;
   END IF;
 
-  -- 2. 同一事务中写入不可变事件流水（分配单调 sequence 与 event_id 唯一约束）
-  INSERT INTO task_events (event_id, aggregate_id, aggregate_version, sequence, topic, payload, payload_digest, ...);
+  -- 2. 确定性序号分配与不可变事件流水写入（C-02 核心契约）
+  -- 序号分配原则：直接使用成功 CAS 递增后的聚合版本作为事件序号（sequence = expected_version + 1 = aggregate_version）
+  -- 表级约束：对 (aggregate_id, sequence) 建立 UNIQUE 联合唯一约束；对 event_id 建立全局 UNIQUE 唯一约束
+  INSERT INTO task_events (
+    event_id, aggregate_id, aggregate_version, sequence,
+    topic, actor, payload, payload_digest, causation_id, correlation_id, recorded_at, replay_policy
+  ) VALUES (
+    :event_id, :agg_id, :expected_version + 1, :expected_version + 1,
+    :topic, :actor, :payload, :payload_digest, :causation_id, :correlation_id, :current_timestamp, 'PROJECTION_ONLY'
+  );
 
   -- 3. 同一事务中写入 Outbox 发件箱表（status 默认为 'PENDING'）
-  INSERT INTO transactional_outbox (outbox_id, event_id, destination, status, created_at);
+  INSERT INTO transactional_outbox (outbox_id, event_id, destination, status, created_at)
+  VALUES (:outbox_id, :event_id, :destination, 'PENDING', :current_timestamp);
 COMMIT;
 
 -- 4. 异步 Outbox Dispatcher 守护进程
@@ -415,10 +424,20 @@ Outbox Dispatcher 独立轮询或监听 Outbox 表 ──> 保证 At-Least-Once 
        ↓
 投递成功收到总线 ACK ──> 更新 Outbox 表 status = 'SENT'（独立于下游消费确认）
 
--- 5. 下游订阅者独立 Inbox 幂等消费
-下游消费者在其本地独立事务中：
-  检查 consumer_inbox (event_id, consumer_name) 唯一记录 ──> 若已消费直接幂等 ACK
-  若未消费 ──> 执行业务投影写入 ──> 插入 consumer_inbox ──> 提交本地业务事务
+-- 5. 下游订阅者独立 Inbox 幂等消费契约（C-02 本地事务与唯一约束）
+-- consumer_inbox 表定义：PRIMARY KEY (consumer_name, event_id)
+-- 消费端必须将“业务投影写入”与“插入 consumer_inbox”置于同一个本地数据库事务中：
+BEGIN TRANSACTION;
+  -- 检查消费去重记录（或依赖主键冲突拦截）
+  IF EXISTS (SELECT 1 FROM consumer_inbox WHERE consumer_name = :c_name AND event_id = :e_id) THEN
+    COMMIT; -- 已消费过，直接幂等成功 ACK
+  ELSE
+    -- 执行具体的业务投影或状态转换更新
+    UPDATE task_projections SET ... WHERE ...;
+    -- 记录消费凭据
+    INSERT INTO consumer_inbox (consumer_name, event_id, processed_at) VALUES (:c_name, :e_id, :current_timestamp);
+    COMMIT; -- 原子提交业务与去重记录
+  END IF;
 ```
 
 **关键架构隔离铁律**：
@@ -482,20 +501,25 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
 2. **源码只读 ACL 与外部证据存储（Read-Only ACL & External Storage）**：
    - 在 QA 任务启动时，系统通过 Windows NTFS ACL（如 `icacls`）将 DEV 工作树目录对 QA 账户显式标记为**严格只读（Read & Execute only）**，物理阻断 QA 修改被测代码的可能；
    - **外部证据存储契约**：QA 的测试产物与审计日志**强制重定向至工作区外独立的受保护凭据存储卷**，DEV 账户对此目录无修改权限，严禁 QA 在被测仓库工作树内直接获得写入权限。
-3. **Credential Broker 认证代理与安全生命周期（F-05）**：
-   - **IPC 客户端身份认证**：Credential Broker 仅通过本地命名管道（Named Pipe）提供临时凭据服务；管道配置严密安全描述符（SDDL），并在连接时调用 `ImpersonateNamedPipeClient` 与 `GetNamedPipeClientProcessId` 严格核验客户端 PID、用户 SID 及父 Job Object，确认其对应当前合法调度的任务；
-   - **短期作用域令牌**：Agent 进程严禁持有长期持久化密钥（如 GitHub PAT），仅由 Broker 按任务签发限定 Audience、限定 Scope、最短生存期（TTL ≤ 15 分钟）的临时令牌；任务撤销（`REVOKED`）或超时时 Broker 立即远程吊销并在本地失效；
-   - **并发任务隔离**：不同并发任务分配互相独立的临时凭据，杜绝跨任务凭据混用；固定缓冲区使用后调用 `SecureZeroMemory`；
-   - **Broker 反向代理优先原则**：对于 GitHub API、远端制品存储上传等标准外部调用，优先由 Broker 作为受保护的反向代理直接代为发起调用并审计，仅将结果返回给 Agent，最大程度避免凭据实体暴露于 Worker 内存空间。
+3. **Credential Broker 认证代理与安全生命周期（F-05 & C-04）**：
+   - **IPC 客户端身份认证与 PID 生命周期防重用**：Credential Broker 仅通过本地命名管道（Named Pipe）提供临时凭据服务；管道配置严密安全描述符（SDDL）。调用 `GetNamedPipeClientProcessId` 取得客户端 PID 后，必须通过 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 获取进程句柄，核验进程的创建时间戳（`GetProcessTimes`），严格防止 PID 发生回收重用攻击；
+   - **Job Object 归属核验**：通过 `IsProcessInJob` 严格校验该进程句柄确实隶属于宿主为当前任务派发的受控 Job Object 实例；
+   - **模拟失败即时 Fail-Closed 与 RevertToSelf**：调用 `ImpersonateNamedPipeClient` 执行安全上下文模拟；**若身份模拟失败（返回值 FALSE），服务端绝对禁止以 Broker 自身高权限继续执行后续请求**，必须立即 Fail-Closed 抛出安全异常并断开管道；在模拟检查完成后及任何退出分支，必须强制调用 `RevertToSelf` 恢复自身安全上下文，杜绝特权残留；
+   - **细粒度任务级凭据授权绑定（Task-Bound Scope Grant）**：连接建立仅完成进程身份初步认证，Broker 必须在每次请求载荷中严格核验任务级凭据授权：验证 Task ID、Audience、具体 API Scope、任务生命周期状态以及当前撤销版本（Revocation Version）；
+   - **短期作用域令牌与内存清零**：Agent 进程严禁持有长期持久化密钥（如 GitHub PAT），仅由 Broker 按任务签发限定 Audience、限定 Scope、最短生存期（TTL ≤ 15 分钟）的临时令牌；任务撤销（`REVOKED`）或超时时 Broker 立即远程吊销并在本地失效；固定缓冲区使用后调用 `SecureZeroMemory`；
+   - **Broker 反向代理与操作级审计优先原则**：对于 GitHub API、远端制品存储上传等标准外部调用，优先由 Broker 作为受保护的反向代理直接代为发起调用，不仅验证连接发起者，更对发出的每个具体 HTTP/API 操作进行白名单路径、动作与参数级深度审计，仅将结果返回给 Agent，最大程度避免凭据实体暴露于 Worker 内存空间；
+   - **非标准进程创建逃逸测试**：Job Object 默认管理通过 `CreateProcess` 创建的子进程，但通过 WMI（`Win32_Process.Create`）或 RPC 机制发起的跨上下文进程创建无法自动继承 Job 关联，必须在安全策略中审计并禁止 Worker 调用此类接口，并将其列入 Conformance 专用逃逸测试。
 4. **Windows Job Objects 进程树回收与启动安全序（F-04）**：
    - **消除绝对化承诺**：在受支持的 Windows 环境及既定威胁模型下，通过 Windows Job Objects 施加严格的进程生命周期管理；
    - **挂起启动与入组失败硬防护**：宿主使用 `CREATE_SUSPENDED` 标志调用 `CreateProcess` 创建初始进程，并立即调用 `AssignProcessToJobObject`；**若绑定失败，宿主必须立即调用 `TerminateProcess` 强制销毁进程并拒绝启动，严禁在未成功加入 Job Object 前调用 `ResumeThread`**，彻底消除加入前的逃逸竞态；
    - **句柄权属与防跨进程复制**：Job Handle 仅由宿主超级守护进程持有，设置 `bInheritHandle = FALSE`，并通过安全描述符禁止子进程复制或打开 Job 句柄；显式配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，且不授予 `JOB_OBJECT_LIMIT_BREAKAWAY_OK` 策略，从内核层拦截 `CREATE_BREAKAWAY_FROM_JOB`；
    - **嵌套与终止验证**：支持 Windows 嵌套 Job 策略，确保终止信号逐级传递；该机制必须通过 Conformance Suite 中的专用进程树逃逸测试验证。
-5. **Windows 本地防火墙 OS 级网络旁路防护（OS-level Network Default-Deny）**：
-   - Job Objects 仅负责进程生命周期，无法阻止进程绕过 Tool Gateway 直接建立 Socket 连接；
-   - 宿主通过 Windows Advanced Firewall 为 Worker 用户账户（`fpf_dev_worker`, `fpf_qa_worker`）配置**默认拒绝出站规则（Block all outbound traffic by default）**；
-   - 仅白名单放行发往本地 Tool Gateway 监听端口（如 `127.0.0.1:49152`）的出站流量；所有非白名单的直接网络请求（包括 PowerShell、curl 或隐式浏览器连接）在 OS 网络层被直接丢弃，物理杜绝网络旁路。
+5. **Windows 过滤平台（WFP / ALE）用户级出站隔离契约（F-04 & C-03）**：
+   - **区分全局配置与用户层过滤**：标准 Windows 高级防火墙的 `DefaultOutboundAction` 属于设备/网络配置文件（Domain/Private/Public）全局策略，默认通常为 Allow，无法单凭普通防火墙规则直接为特定本地用户设定独立的默认出站动作；
+   - **基于 WFP 应用层强制（ALE）用户 SID 过滤**：宿主通过 Windows Filtering Platform（WFP）底层的 ALE（Application Layer Enforcement）连接层/授权层驱动规则，依据 Worker 账户的用户安全标识符（User SID，如 `fpf_dev_worker` 与 `fpf_qa_worker`）建立用户级出站拦截过滤器（`FWPM_CONDITION_ALE_USER_ID`）；
+   - **默认丢弃与白名单放行**：对命中 Worker SID 的所有出站连接默认施加丢弃（Block / Drop），仅精确放行目标为本地 Tool Gateway 监听端点（限定本地 IP 如 `127.0.0.1` 及指定监听端口 `49152`，并核验 Tool Gateway 宿主应用二进制哈希）的合法连接；
+   - **消除回环与协议旁路**：严格拦截 Worker 进程对宿主机其他本地监听服务、IPv6 回环地址（`::1`）及未授权接口的探测与直连；
+   - **非标准网络与进程创建审计**：审计并禁止 Worker 账户直接调用非标准 Winsock raw socket 或隐式浏览器连接，确保所有外部出站流量 100% 物理受限于 Tool Gateway。
 6. **Tool Gateway 全面接管（Tool Gateway Interception）**：
    - 严禁 Agent 自由调用未经白名单审计的 Windows 系统命令或自动化浏览器；所有文件写操作、网络请求与外部工具调用统一经由 Tool Gateway 策略引擎鉴权。
 
@@ -568,9 +592,17 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
 | **Core Profile** | 核心架构、状态机、数据契约、网关（高风险） | 容器隔离或独立 OS 账户 | 独立 QA 主体 + 远端实机 Actions 物理 Artifact | 100% 全量回归测试通过 (0 Fail)<br>100% 核心分支路径覆盖<br>100% 物理哈希防篡改对齐 |
 | **Release Profile** | 正式版本发布、线上环境部署（极高风险） | 强隔离 VM 或受限预发实机 | **三主体防兼任铁律**：DEV 作者、独立 QA、人类发布授权人必须为三个完全独立的账号与私钥 | 100% 全量套件与 E2E 绿灯<br>100% 覆盖跨平台兼容矩阵<br>100% 干净工作树（0 未跟踪/未提交） |
 
-- **例外豁免治理规程（Exception Waiver Governance）**：若因不可抗力或紧急抢修需降级 Profile 门槛，严禁隐式绕过，必须由人类负责人签发正式的 `POLICY_WAIVER` 事件，记录风险评估、降级理由、明确有效期（默认最长 72 小时）与补偿测试承诺，在项目地图中公开归档。
+- **例外豁免治理规程与不可豁免项铁律（Exception Waiver Governance - C-07）**：
+  若因不可抗力或紧急抢修需临时降级 Profile 门槛，严禁隐式绕过，必须由人类负责人签发正式的 `POLICY_WAIVER` 事件，记录风险评估、降级理由、明确有效期（默认最长 72 小时）与补偿测试承诺，在项目地图中公开归档。
+  **五项绝对不可豁免项（Non-Waivable Hard Invariants）**：
+  1. **人类最终合并与发布授权**：严禁由 Agent 自行签发批准合入主干（`MERGED`）或生产发布；
+  2. **DEV 与 QA 主体完全独立性**：DEV 作者与 QA 审查主体账号与私钥绝对禁止兼任；
+  3. **工作令授权范围与禁止路径**：严禁豁免 `allowed_paths` 与敏感治理配置文件的防越权修改门禁；
+  4. **凭据隔离、只读 ACL 与审计完整性**：严禁授予 QA 被测工作树写入权，严禁向普通 Worker 注入长期高权限密钥；
+  5. **外部未证明副作用严禁自动重发**：无法证明远端绝对未执行时，严禁豁免重发限制。
+  **时效与逾期降级契约**：`POLICY_WAIVER` 达到 72 小时上限必须自动失效；豁免中约定的补偿测试任务必须在指定时间内完成并通过独立 QA；若补偿测试逾期未完成，系统立即强制将工单与项目状态转入 `HUMAN_RESOLUTION_REQUIRED`，冻结进一步发布。
 
-#### 3. 完备的治理生命周期状态机与全阶段异常迁移规则（F-07）
+#### 3. 完备的治理生命周期状态机与全阶段异常迁移规则（F-07 & C-05）
 
 生命周期严格由确定性事件驱动，覆盖正常与异常分支，任何阶段不可凭自由文本跳跃：
 
@@ -600,9 +632,12 @@ DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA
        │                      │               │                                       │
        │                      ▼               ▼                                       ▼
        │                    MERGED        ARCHIVED ──────────────────────> HUMAN_RESOLUTION_REQUIRED
-       │                      │                                                       │
-       │                      ▼ (线上故障回滚)                                        ▼ (人工签发裁定)
-       │                   ROLLBACK (独立授权)                                  HUMAN_RESOLVED / ABORT
+       │                      │                                                       ▲
+       │                      ▼ (线上故障回滚)                                        │ (回滚执行失败)
+       │              ROLLBACK_WORK_ORDER ──> ROLLBACK_EXECUTING ──> ROLLBACK_QA ─────┘
+       │                                                              │ (QA PASS)
+       │                                                              ▼
+       │                                                          ROLLED_BACK
 ```
 
 **全阶段异常分支契约**：
@@ -622,6 +657,20 @@ DRAFT_WORK_ORDER ──> DISPATCHED ──> DEV_SUBMITTED ──> INDEPENDENT_QA
    - 针对测试环境故障、依赖拉取超时、Runner 崩溃等非代码缺陷中断，状态置为 `INVALID_TEST`；设立独立重试计数（默认上限 2 次），**绝对不计入 DEV 业务代码返工次数**；重试耗尽强制转入 `HUMAN_RESOLUTION_REQUIRED`。
 5. **`BLOCKED` 状态精确解除条件**：
    - 仅在导致阻塞的根本原因（如前置工单合并、远端 SHA 冲突决水完成）经权威事实核验消除，并由 Reducer 生成 `UNBLOCKED` 事件后，方可恢复至 `DISPATCHED`；不得因偶发单次网络请求成功就假定解除。
+6. **远端取消与完成的异步竞态对账契约（Cancellation & Completion Race - C-05）**：
+   - 远端取消绝非瞬间完成，本地发出取消指令后，严禁直接将远端任务假定为已取消；
+   - 本地状态细化为：
+     - `CANCEL_REQUESTED`：本地已发出取消意图；
+     - `CANCEL_PENDING`：等待远端权威系统确认回执；
+     - `REMOTE_CANCELLED`：远端确认取消成功，回收资源并安全归档；
+     - `REMOTE_SUCCEEDED`：远端在取消到达前已执行成功；
+     - `CANCEL_CONFLICT`：取消与完成发生并发竞争，对账引擎必须重新对账并核验产物哈希，严禁丢弃已生成的有效制品。
+7. **ROLLBACK 完整治理生命周期契约（Full Rollback Lifecycle - C-05）**：
+   - 触发条件：已合入（`MERGED`）或发布（`RELEASED`）的代码发生重大线上故障，必须由人类负责人签发正式的 `ROLLBACK_WORK_ORDER`；
+   - 状态流转：`ROLLBACK_WORK_ORDER` 启动后进入 `ROLLBACK_EXECUTING`，生成明确的反向 Git Commit SHA；
+   - 独立验证门禁：回滚提交严禁直接合入 main，必须同样经过独立 QA Runner 执行回归测试并生成 `ROLLBACK_QA_VERIFIED` 物理证据包；
+   - 异常接管：若回滚执行发生合并冲突或测试未通过，系统绝对禁止反复自动重试，必须立即跃迁至 `HUMAN_RESOLUTION_REQUIRED`，冻结变更并转入人工紧急接管；
+   - 终态确认：独立 QA PASS 且人类签署后合入主干，状态标记为 `ROLLED_BACK` 并同步至项目地图。
 
 #### 4. 向后兼容的执行记录标签（Historical Capture Tags）
 
@@ -894,13 +943,23 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 消除循环信任：Conformance 独立信任根架构（Root of Trust）
+#### 消除循环信任：Conformance 独立信任根架构与交叉验证（Root of Trust - C-06）
 
-为彻底解决“Conformance 验证 Standard、谁来验证 Conformance”的循环信任问题，系统确立四重信任锚点：
+为彻底解决“Conformance 验证 Standard、谁来验证 Conformance”的循环信任问题，系统确立严密的独立信任根架构与交叉验证契约：
 1. **规范独立元模型（Specification Meta-Model）**：Standard 内部包含形式化元模式（Meta-Schema），中立定义所有规范对象的不变性公理与合法语法。
-2. **零依赖基础规范校验器（Minimal Base Spec Validator）**：提供轻量、自包含的纯函数元模式校验器（无外部依赖、无 Runtime 绑定），可脱离系统独立运行，核验 Standard 规范本身语法与契约的数学自洽性。
-3. **官方标准测试向量（Authoritative Golden Test Vectors）**：社区独立维护一组不可篡改的标准输入载荷与预期判定输出套件，作为任何 Conformance 实现的绝对评判基准。
-4. **发布签名与版本锁定**：Conformance Suite 发布包由官方维护者 GPG 私钥签名，并在构建时硬编码锁定其所验证的 Standard 版本的物理哈希指纹，杜绝动态漂移。
+2. **零依赖基础校验器与独立双实现交叉验证（Dual-Implementation Cross-Verification）**：
+   - Minimal Base Spec Validator 必须存在至少两个完全独立的纯函数实现（如 Python 纯函数实现与 Rust 零依赖编译实现），无外部依赖、无 Runtime 绑定；
+   - CI 与发布门禁必须由两个独立实现的校验器对 Standard 规范及元模式执行独立交叉验证；只有两个校验器的一致性判定达到 100% 时，方可允许构建进入发布阶段。
+3. **带外公钥锚定与轮换机制（Out-of-Band Trust Anchor & Key Rotation）**：
+   - **澄清签名语义**：GPG 签名能够证明发布包来自持有相应私钥的发布者（证明来源真实性与防篡改），但不自动证明规范本身的数学无错性；
+   - 初始信任公钥指纹必须通过带外（Out-of-Band）独立渠道分发与公证锚定（如官方安全发布页、不可篡改证书透明度日志）；公钥轮换与吊销遵循严格的证书吊销列表（CRL）与 M-of-N 多签治理策略。
+4. **官方标准测试向量独立多源维护与冲突裁决（Golden Test Vectors & Errata）**：
+   - 官方标准测试向量（Golden Test Vectors）由跨组织规范工作组在独立的 Git 仓库中单独版本化维护，与任何具体的 Runtime 代码库解耦；
+   - 当 Standard 规范与测试向量产生歧义或冲突时，由五权架构仲裁委员会发起形式化评审并发布勘误（Errata），在此之前遵循 Fail-Closed 原则暂停该特性的合规认证。
+5. **完全确定性的可复现构建（Deterministic Reproducible Builds）**：Conformance Suite 校验器构建流程完全封闭可复现（Hermetic），任何人均可根据源码复现完全一致的二进制制品与物理 SHA-256 哈希指纹。
+6. **六维兼容矩阵实测有效原则**：
+   - 兼容矩阵中声明的向后兼容（例如 Runtime 2.1 支持 Standard 2.0），明确是指 Runtime 2.1 运行时向下兼容执行 Standard 2.0 规范；
+   - 任何兼容性声明必须以 Conformance Suite 在 CI 中实际运行通过的组合为准，严禁仅凭 Manifest 声明而未经实测通过就认定兼容。
 
 #### 产品六维版本兼容矩阵（Six-Dimensional Compatibility Matrix）
 
@@ -908,9 +967,9 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 
 | Standard 版本 | Schema 契约版本 | Runtime 支持版本 | Adapter 兼容能力集 | Conformance Suite | Agent Eval 数据集 | 兼容策略与迁移说明 |
 |---|---|---|---|---|---|---|
-| **2.0.0** (正式) | `v2.0` (正式发行) | `2.0.0`+ | `v2.0` (Class A/B 幂等) | `v2.0.0` (绑定 2.0.0 信任根) | `eval-2026.10` (独立版本) | 基础正式发行版，严格向下兼容所有 2.0.x 补丁 |
+| **2.0.0** (正式) | `v2.0` (正式发行) | `2.0.0`+ (实测兼容) | `v2.0` (Class A/B 幂等) | `v2.0.0` (绑定 2.0.0 信任根) | `eval-2026.10` (独立版本) | 基础正式发行版，严格向下兼容所有 2.0.x 补丁 |
 | **2.0.x-draft** | `draft-2026-10-31` | `2.0.0-alpha` ~ `beta` | 试验性 Adapter | `v2.0-draft` | 内部试验评测集 | 开发草案标识，禁止用于生产合规认证 |
-| **2.1.0** (规划) | `v2.1` | `2.1.0`+ (向下兼容 2.0) | `v2.1` (支持 Outbox CDC) | `v2.1.0` (兼容 2.0 套件) | `eval-2027.01` | 保持五权核心契约不变，向下兼容 2.0.x |
+| **2.1.0** (规划) | `v2.1` | `2.1.0`+ (运行时兼容 2.0) | `v2.1` (支持 Outbox CDC) | `v2.1.0` (兼容 2.0 套件) | `eval-2027.01` | 保持五权核心契约不变，向下兼容 2.0.x |
 
 兼容性与显式声明铁律：
 - **强制 Manifest 显式声明**：Reference Runtime 与 Adapter 必须在 Manifest 中显式声明所支持的规范版本与能力集，例如：
