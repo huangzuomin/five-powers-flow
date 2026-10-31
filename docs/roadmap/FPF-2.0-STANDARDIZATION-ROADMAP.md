@@ -524,7 +524,7 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
    - **严格限定 ALE 层用户身份过滤条件**：
      1) **ALE 连接授权层（`FWPM_LAYER_ALE_AUTH_CONNECT_V4` 与 `FWPM_LAYER_ALE_AUTH_CONNECT_V6`）**：在此层依据 Worker 账户的用户安全标识符（User SID，如 `fpf_dev_worker` 与 `fpf_qa_worker`）精确配置 `FWPM_CONDITION_ALE_USER_ID` 过滤规则。对命中该 SID 的所有出站 TCP 握手、UDP 首次发包以及 Raw Socket/ICMP 会话建立实施默认丢弃（Block / Drop），仅精确白名单放行目标为本地 Tool Gateway（限定本地 IPv4 `127.0.0.1`、指定监听端口 `49152`，并绑定 Tool Gateway 宿主应用二进制路径哈希）的合法 TCP 连接；
      2) **ALE 资源分配层（`FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4` 与 `_V6`）**：依据 Worker SID 实施本地 Socket 绑定与监听控制，严格禁止 Worker 进程在未授权端口上创建对外监听端点；
-     3) **传输层补充过滤与流关联（Transport Layers & Flow Context Association）**：明确 `FWPM_CONDITION_ALE_USER_ID` 仅在 ALE 层原生有效；传输层（`FWPM_LAYER_OUTBOUND_TRANSPORT_V4` 与 `_V6`）作为协议级补充防护，通过 ALE 层建立的 WFP 流上下文（Flow Context Association）及传输层原生支持的过滤条件（协议号、目标端口）协同实施深度数据包过滤；
+     3) **传输层补充过滤与流上下文显式关联（Transport Layers & Explicit Flow Context Association）**：明确 `FWPM_CONDITION_ALE_USER_ID` 仅用于支持该条件的 ALE 过滤层，严禁在 `OUTBOUND_TRANSPORT` 层直接使用该身份条件。传输层（`FWPM_LAYER_OUTBOUND_TRANSPORT_V4` 与 `_V6`）仅使用该层原生支持的过滤条件（如 `FWPM_CONDITION_IP_PROTOCOL`、`FWPM_CONDITION_IP_REMOTE_ADDRESS`、`FWPM_CONDITION_IP_REMOTE_PORT`）实施逐包过滤。若需要将 ALE 层识别的 Worker 身份及授权状态延续至传输层，必须由内核 Callout Driver 显式实现 Flow Context Association：通过 `FwpsFlowAssociateContext0` 将驱动定义的上下文关联至目标过滤层及其 Callout，并确保对应 Callout 注册 `flowDeleteFn`，正确处理上下文释放、连接终止及重新授权。该上下文不是 WFP 自动跨层传播机制。未完成真实驱动实现及 Windows 11 实机验证前，相关能力标记为 `NOT_RUN`。
    - **分协议覆盖与未经实测声明约束**：
      - TCP/UDP：通过 ALE 连接授权层实现基于 Worker SID 的严格拦截与本地白名单放行；
      - IPv6：默认在 `_V6` ALE 过滤层施加丢弃规则，物理阻断 IPv6 回环地址（`::1`）与外网探测；
