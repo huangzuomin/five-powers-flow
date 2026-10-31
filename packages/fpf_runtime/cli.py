@@ -1,9 +1,12 @@
-"""Command-line entrypoint for API-agent + Codex + optional GitHub PR integration."""
+"""Command-line entrypoint for API-agent + Codex + optional GitHub PR integration + Daemon."""
 from __future__ import annotations
+
 import argparse
 import json
+import os
 from pathlib import Path
 import shlex
+import signal
 import sys
 
 from .adapters import CodexExec, OpenAIResponsesRoles, git
@@ -11,7 +14,66 @@ from .ledger import Ledger
 from .runtime import SliceRuntime
 
 
+def handle_daemon_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="fpf daemon", description="FPF Coordinator background daemon control")
+    parser.add_argument("action", choices=["start", "stop", "status", "tick"], help="Daemon control action")
+    parser.add_argument("--state-db", type=Path, default=Path(".fpf-runtime/coordinator.sqlite3"))
+    parser.add_argument("--pid-file", type=Path, default=Path(".fpf-runtime/daemon.pid"))
+    parser.add_argument("--interval", type=float, default=2.0)
+    parser.add_argument("--background", action="store_true", default=False)
+    args = parser.parse_args(argv)
+
+    from packages.fpf_runtime.daemon import DaemonConfig, DaemonServer, is_pid_alive
+
+    cfg = DaemonConfig(
+        state_db_path=args.state_db,
+        pid_file=args.pid_file,
+        interval_seconds=args.interval,
+    )
+    server = DaemonServer(cfg)
+
+    if args.action == "start":
+        print(f"Starting FPF coordinator daemon (ID: {cfg.daemon_id})...")
+        server.start(background=args.background)
+        print("Daemon running.")
+        return 0
+    elif args.action == "stop":
+        if cfg.pid_file.exists():
+            try:
+                pid = int(cfg.pid_file.read_text(encoding="utf-8").strip())
+                if is_pid_alive(pid):
+                    if sys.platform == "win32":
+                        import ctypes
+                        PROCESS_TERMINATE = 0x0001
+                        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, 0, pid)
+                        if handle:
+                            ctypes.windll.kernel32.TerminateProcess(handle, 0)
+                            ctypes.windll.kernel32.CloseHandle(handle)
+                    else:
+                        os.kill(pid, signal.SIGTERM)
+                cfg.pid_file.unlink(missing_ok=True)
+                print(f"Daemon process {pid} stopped.")
+                return 0
+            except Exception as e:
+                print(f"Failed to stop daemon: {e}", file=sys.stderr)
+                return 1
+        print("Daemon PID file not found, daemon appears stopped.")
+        return 0
+    elif args.action == "status":
+        st = server.status()
+        print(json.dumps(st, indent=2, ensure_ascii=False))
+        return 0
+    elif args.action == "tick":
+        res = server.tick_once()
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "daemon":
+        return handle_daemon_command(sys.argv[2:])
+
     p = argparse.ArgumentParser(description="FPF single-slice integrated runtime 0.2")
     p.add_argument("--task-id", required=True)
     p.add_argument("--goal")
