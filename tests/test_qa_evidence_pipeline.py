@@ -35,12 +35,12 @@ class TestArtifactVerification(unittest.TestCase):
         digest = "sha256:" + hashlib.sha256(payload).hexdigest()
         with self.assertRaises(ValueError) as ctx:
             verify_artifact_sha256(tampered, digest)
-        self.assertIn("Artifact digest mismatch", str(ctx.exception))
+        self.assertIn("does not match", str(ctx.exception))
 
     def test_verify_artifact_sha256_invalid_format_fails(self):
         with self.assertRaises(ValueError) as ctx:
             verify_artifact_sha256(b"content", "not_a_valid_sha256")
-        self.assertIn("invalid format", str(ctx.exception))
+        self.assertIn("missing or invalid", str(ctx.exception))
 
     def test_no_auth_redirect_handler_strips_auth(self):
         handler = _NoAuthRedirectHandler()

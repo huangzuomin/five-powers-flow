@@ -32,11 +32,11 @@ FORBIDDEN_DEV_QA_PATHS = (
 def verify_artifact_sha256(data: bytes, expected_digest: str) -> None:
     """Cryptographically verify that artifact payload matches claimed digest."""
     if not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", expected_digest):
-        raise ValueError("GitHub artifact digest missing or invalid format; refusing unbound bytes")
+        raise ValueError("GitHub artifact digest missing or invalid; refusing unbound bytes")
     computed = hashlib.sha256(data).hexdigest()
     if computed != expected_digest[7:].lower():
         raise ValueError(
-            f"Artifact digest mismatch! Expected {expected_digest[7:].lower()}, computed {computed}"
+            f"GitHub-provided artifact digest does not match ZIP! Expected {expected_digest[7:].lower()}, computed {computed}"
         )
 
 
