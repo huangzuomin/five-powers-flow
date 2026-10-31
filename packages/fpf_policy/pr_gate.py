@@ -64,8 +64,11 @@ def classify(paths: list[str], kind: str, baseline_files: set[str],
             ".fpf/", "schemas/", ".github/workflows/")))
         if any(not allowed(p) for p in changed_set):
             raise ValueError("BOOTSTRAP contains application code / unauthorized path")
-        if not {"agents.md","docs/coordination/project-map.md",
-                ".fpf/project.yaml"}.issubset(changed_set):
+        has_agents = "agents.md" in changed_set or "agents.md" in baseline_files
+        has_map = ("docs/coordination/project-map.md" in changed_set or
+                   "docs/project-map.md" in baseline_files or
+                   "docs/coordination/project-map.md" in baseline_files)
+        if not (has_agents and has_map and ".fpf/project.yaml" in changed_set):
             raise ValueError("BOOTSTRAP missing required initial governance artifacts")
         if any(p in baseline_files for p in changed_set):
             raise ValueError("BOOTSTRAP cannot overwrite existing baseline files")

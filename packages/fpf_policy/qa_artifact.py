@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
 import zipfile
 
 from packages.fpf_coordinator.coordinator import verify_evidence_directory
@@ -36,12 +36,22 @@ def api_json(repo: str, endpoint: str, token: str) -> dict:
     return value
 
 
+class _NoAuthRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req:
+            new_req.headers = {k: v for k, v in new_req.headers.items() if k.lower() != "authorization"}
+            new_req.unredirected_hdrs = {k: v for k, v in new_req.unredirected_hdrs.items() if k.lower() != "authorization"}
+        return new_req
+
+
 def download_zip(repo: str, artifact_id: int, token: str) -> bytes:
+    opener = build_opener(_NoAuthRedirectHandler)
     request = Request(
         f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip",
         headers={"Authorization": "Bearer " + token},
     )
-    with urlopen(request, timeout=60) as response:
+    with opener.open(request, timeout=60) as response:
         content = response.read(25 * 1024 * 1024 + 1)
     if len(content) > 25 * 1024 * 1024:
         raise ValueError("QA artifact archive exceeds size limit")
@@ -51,10 +61,13 @@ def download_zip(repo: str, artifact_id: int, token: str) -> bytes:
 def ancestor(commit: str, base_ref: str, cwd: Path) -> bool:
     if not re.fullmatch(r"[a-fA-F0-9]{40}", commit):
         return False
-    return subprocess.run(
-        ["git", "merge-base", "--is-ancestor", commit, base_ref],
-        cwd=cwd, capture_output=True, timeout=30,
-    ).returncode == 0
+    for ref in (base_ref, f"origin/{base_ref}", f"refs/remotes/origin/{base_ref}"):
+        if subprocess.run(
+            ["git", "merge-base", "--is-ancestor", commit, ref],
+            cwd=cwd, capture_output=True, timeout=30,
+        ).returncode == 0:
+            return True
+    return False
 
 
 @contextmanager
@@ -79,7 +92,8 @@ def independent_qa_evidence(*, repo: str, qa: dict, reviewer: str,
     if str((run.get("triggering_actor") or {}).get("login", reviewer)).casefold() != reviewer.casefold():
         raise ValueError("QA run was re-run by another identity")
     workflow_path = str(run.get("path") or "")
-    if not workflow_path.endswith("/.github/workflows/fpf-independent-qa.yml"):
+    if not (workflow_path == ".github/workflows/fpf-independent-qa.yml" or
+            workflow_path.endswith("/.github/workflows/fpf-independent-qa.yml")):
         raise ValueError("QA run did not come from a designated independent QA workflow")
     if not ancestor(str(run.get("head_sha") or ""), "main", repository_dir):
         raise ValueError("QA workflow commit is not on trusted main")
