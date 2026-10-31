@@ -519,15 +519,17 @@ FPF 的核心目标是统一治理协议，而不是强制所有执行环境采�
    - **挂起启动与入组失败硬防护**：宿主使用 `CREATE_SUSPENDED` 标志调用 `CreateProcess` 创建初始进程，并立即调用 `AssignProcessToJobObject`；**若绑定失败，宿主必须立即调用 `TerminateProcess` 强制销毁进程并拒绝启动，严禁在未成功加入 Job Object 前调用 `ResumeThread`**，彻底消除加入前的逃逸竞态；
    - **句柄权属与防跨进程复制**：Job Handle 仅由宿主超级守护进程持有，设置 `bInheritHandle = FALSE`，并通过安全描述符禁止子进程复制或打开 Job 句柄；显式配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，且不授予 `JOB_OBJECT_LIMIT_BREAKAWAY_OK` 策略，从内核层拦截 `CREATE_BREAKAWAY_FROM_JOB`；
    - **嵌套与终止验证**：支持 Windows 嵌套 Job 策略，确保终止信号逐级传递；该机制必须通过 Conformance Suite 中的专用进程树逃逸测试验证。
-5. **Windows 过滤平台（WFP / ALE）全层网络出站隔离契约（F-04 & C-03）**：
+5. **Windows 过滤平台（WFP / ALE）网络出站分层隔离契约（F-04 & C-03）**：
    - **区分全局配置与内核过滤层**：标准 Windows 高级防火墙的 `DefaultOutboundAction` 属于设备/网络配置文件（Domain/Private/Public）全局策略，默认通常为 Allow，无法单凭普通防火墙规则直接为特定本地用户设定独立的默认出站动作；
-   - **精确绑定 WFP ALE 与 Transport 过滤层**：宿主通过 Windows Filtering Platform（WFP）底层的 ALE 与传输层驱动，依据 Worker 账户的用户安全标识符（User SID，如 `fpf_dev_worker` 与 `fpf_qa_worker`）建立跨网络层出站拦截规则集：
-     1) ALE 连接授权层（`FWPM_LAYER_ALE_AUTH_CONNECT_V4` 与 `FWPM_LAYER_ALE_AUTH_CONNECT_V6`）：拦截所有出站 TCP 握手与 UDP 首次连接请求；
-     2) ALE 资源分配层（`FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4` 与 `_V6`）：严格禁止 Worker 进程在未授权端口上创建监听端点；
-     3) 传输层（`FWPM_LAYER_OUTBOUND_TRANSPORT_V4` 与 `_V6`）：拦截 ICMP 请求与非标准 Raw Sockets 绕过尝试；
-   - **默认丢弃与白名单放行**：对命中 Worker SID 的所有过滤层流量实施默认丢弃（Block / Drop），仅精确放行目标为本地 Tool Gateway 监听端点（限定本地 IPv4 `127.0.0.1` 及指定监听端口 `49152`，并核验 Tool Gateway 宿主应用二进制哈希）的 TCP 连接；
-   - **消除本地与回环旁路**：严格拦截 Worker 进程对宿主机其他本地监听服务、IPv6 回环地址（`::1`）及未授权接口的探测与直连；
-   - **非标准网络与进程创建审计**：审计并禁止 Worker 账户直接调用非标准 Winsock raw socket 或隐式浏览器连接，确保所有外部出站流量 100% 物理受限于 Tool Gateway。
+   - **严格限定 ALE 层用户身份过滤条件**：
+     1) **ALE 连接授权层（`FWPM_LAYER_ALE_AUTH_CONNECT_V4` 与 `FWPM_LAYER_ALE_AUTH_CONNECT_V6`）**：在此层依据 Worker 账户的用户安全标识符（User SID，如 `fpf_dev_worker` 与 `fpf_qa_worker`）精确配置 `FWPM_CONDITION_ALE_USER_ID` 过滤规则。对命中该 SID 的所有出站 TCP 握手、UDP 首次发包以及 Raw Socket/ICMP 会话建立实施默认丢弃（Block / Drop），仅精确白名单放行目标为本地 Tool Gateway（限定本地 IPv4 `127.0.0.1`、指定监听端口 `49152`，并绑定 Tool Gateway 宿主应用二进制路径哈希）的合法 TCP 连接；
+     2) **ALE 资源分配层（`FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4` 与 `_V6`）**：依据 Worker SID 实施本地 Socket 绑定与监听控制，严格禁止 Worker 进程在未授权端口上创建对外监听端点；
+     3) **传输层补充过滤与流关联（Transport Layers & Flow Context Association）**：明确 `FWPM_CONDITION_ALE_USER_ID` 仅在 ALE 层原生有效；传输层（`FWPM_LAYER_OUTBOUND_TRANSPORT_V4` 与 `_V6`）作为协议级补充防护，通过 ALE 层建立的 WFP 流上下文（Flow Context Association）及传输层原生支持的过滤条件（协议号、目标端口）协同实施深度数据包过滤；
+   - **分协议覆盖与未经实测声明约束**：
+     - TCP/UDP：通过 ALE 连接授权层实现基于 Worker SID 的严格拦截与本地白名单放行；
+     - IPv6：默认在 `_V6` ALE 过滤层施加丢弃规则，物理阻断 IPv6 回环地址（`::1`）与外网探测；
+     - ICMP / Raw Sockets：在 ALE 层拦截其 Socket 创建与连接建立；
+     - **真实边界声明**：以上为 Windows 原生环境下的设计安全契约与架构规程；未经真实 Windows 11 实机与专用安全套件验证的能力，严格标记为 `NOT_RUN`，严禁在文档中提前宣称已实现生产级 100% 物理阻断，待阶段 3 实机落地时通过专用 Conformance 网络渗透用例验证。
 6. **Tool Gateway 全面接管（Tool Gateway Interception）**：
    - 严禁 Agent 自由调用未经白名单审计的 Windows 系统命令或自动化浏览器；所有文件写操作、网络请求与外部工具调用统一经由 Tool Gateway 策略引擎鉴权。
 
