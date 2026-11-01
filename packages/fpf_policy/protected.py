@@ -12,6 +12,7 @@ EXACT = frozenset({
     "docs/coordination/project-map.md",
     "docs/coordination/lessons.md",
     "docs/coordination/handoff-protocol.md",
+    "docs/coordination/self-hosting-protocol.md",
     "handoff-protocol.md", ".claude/settings.json",
 })
 PREFIXES = (".github/", ".fpf/", "schemas/",
