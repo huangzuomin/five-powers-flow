@@ -83,3 +83,31 @@
   - 生产部署与真实计费维持 `NOT_AUTHORIZED`
   - 本切片为纯文档变更，无部署动作
 - **归档时间**：2026-11-11
+
+### [FPF2-GOV-DOC-PROFILE-20261112] DOC 证据档 + 规范文本路由封堵 + FPF 2.0 标准文本收口
+- **目标**：让"纯文档切片"拥有真实可执行的独立 QA 证据，并封堵 `docs/standards/` 走 identity-only 路由的绕过面；随后以 DOC profile 收口 `FPF2-STD-SPEC-01`
+- **主干合并（4 个 PR，按序）**：
+  - `baf6cf6f6c605a76f6cd228ffd8f23375f73a55c`（PR #80）DOC profile + `promote_doc_route` + DOC 绑定
+  - `0687cad6bb9587d1bded46439920146d2435d217`（PR #81）`qa-result` / `manifest` schema 的 `profile` 枚举接受 `DOC`
+  - `ac96c2083bcd8b7f698f9892ecec2fbdec2e0d88`（PR #82）manifest `id` 正则放宽到 `EVID-34`
+  - `fe627db07a0aa1039ec700a16ec8bb54ab3ba9c7`（PR #79）`docs/standards/FPF-STANDARD-2.0.md` 424 行 + `tools/standards/` 4 文件 + `tests/standards/test_standard_2_0.py`
+- **QA 证据（DOC profile，独立执行校验器与测试）**：Run `43052955066` / Artifact `fpf-qa-52ab3f5c3bf020ff2b2c00eef2a681c91d803489`（SHA-256: `fcb69c1b5a201958618b3addcac0eaf8ad353ee229c114ebf9adf74574438937`），18 项全 PASS，含 `EVID-33`（`verify_standard.py`，12/12 检查 PASS）与 `EVID-34`（`pytest tests/standards/test_standard_2_0.py`，3 passed）的原始 stdout/stderr/退出码，均绑定 `tested_sha=52ab3f5c`
+- **独立 Review**：`5861538338`，`APPROVED`，`commit_id=52ab3f5c3bf020ff2b2c00eef2a681c91d803489`，主体 `fpf-qa-bot-huangzuomin[bot]`
+- **语义裁决**：ST-QA-CMD（`chatgpt.com/c/6af438e8`）第六轮 `verdict: PASS`，`p0_closed: true`，并确认一次性例外（B 方案）**未行使即作废**
+- **变更范围**：`.fpf/qa-plan.json` 增 `EVID-33/34`；`packages/fpf_coordinator/coordinator.py` 增 DOC 档与 DOC 绑定（目录即契约、路径同源规范化、无仓库上下文 fail-closed）；`packages/fpf_policy/pr_gate.py` 增 `promote_doc_route` / `touched_paths`；两个 schema 放宽；`tests/test_gate_doc_profile.py` 12 用例（`unittest` 编写）
+- **NOT_RUN / 边界**：
+  - G2–H4 仍为 `PLAN_ONLY`
+  - 生产部署与真实计费 `NOT_AUTHORIZED`
+  - `EVID-33/34` 只在 CI 的 `Library`+`DOC` 两条路径上实跑过；浏览器 / 数据库 / 外部 Provider 与本切片无关，`NOT_RUN`
+- **归档时间**：2026-11-12
+
+### [FPF2-STATIONS-20261112] 工位契约入库（人读层）
+- **目标**：把此前只存在于 `.fpf-runtime/`（未跟踪）的工位协议提升为仓库内可跟踪文件，使新线程可读到角色分离契约
+- **代码提交**：`bc521505d2ac80594d8091d2571b08804f3f00d3`
+- **主干合并**：`493a15ea963e597b791b2315076fd66ae1ef8929`（PR #83）
+- **独立 Review**：`5861627163`，`APPROVED`，`commit_id=bc521505d2ac80594d8091d2571b08804f3f00d3`，主体 `fpf-reviewer-huangzuomin[bot]`（identity-only 路由，无 QA dispatch）
+- **变更范围**：新增 `docs/coordination/STATIONS.md`（四工位登记、两个凭据载体权限边界、五条角色分离规则、历史溯源、当前未生效项）
+- **NOT_RUN / 边界**：
+  - 本文件**不产生强制力**；`.fpf/stations.yaml` 与门禁侧的工位身份校验属 G2，尚未实现
+  - 生产部署与真实计费 `NOT_AUTHORIZED`
+- **归档时间**：2026-11-12
