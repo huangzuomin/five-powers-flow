@@ -14,6 +14,7 @@
 | **FPF-AEC-20261031-E** | 安全防护与环境隔离 | DEV-Team | DONE (`cb9b4372ac1f`) | PASS (Run 41221914610) | MERGED (`15e0c1772248`, PR #73) | DEPLOYED |
 | **FPF-AEC-20261031-F** | 持续守护进程与恢复 | DEV-Team | DONE (`8d4e8e7969d8`) | PASS (Run 41223289293) | MERGED (`2ef69643efd4`, PR #74) | DEPLOYED |
 | **FPF-AEC-20261031-G** | 终审大考与交付收口 | DEV-Team | DONE (`ac4febdd355b`) | PASS (Run 41225694824) | MERGED (`bac0088055d8`, PR #75) | DEPLOYED |
+| **FPF-2.0-ROADMAP-20261031** | FPF 2.0 路线图归并与 G2–H4 复盘新增项 | Orchestration Hub | DONE (`81289d4f5ffe`) | PASS (Run 42968508888) | MERGED (`09d4c6076295`, PR #67) | N/A (docs only) |
 
 ## 二、切片详细进度记录
 
@@ -65,3 +66,20 @@
 - **主干合并**：`bac0088055d8306843b4e836172cc6246d1d03a6` (PR #75)
 - **QA 验收报告**：Run #41225694824 / Artifact `13051708070` (SHA-256: `a29b25ee8d6c6919c24d7580c27c2977e684156340f9b6e4ed413c04848f0046`)
 - **归档时间**：2026-11-01
+
+### [FPF-2.0-ROADMAP-20261031] FPF 2.0 标准化路线图归并与 G2–H4 复盘新增项
+- **目标**：将 2026-11-10 复盘出的 G2/G3/G4/H1/H2/H3/H4 七项并入 FPF 2.0 路线图，刷新 §2 基线至 2026-11-11，新增「AEC Phase A–G → 六平面」附录，并把 AEC 文档降级为历史阶段快照
+- **代码提交**：`81289d4f5ffe6d6db443c8260c7525e0a18adb56`
+- **主干合并**：`09d4c60762953503a8baff610f71225cf7ed35f1` (PR #67)
+- **QA 验收报告**：Run #42968508888 / Artifact `13832222368` (SHA-256: `24fd52fdc08dcb27a009e744c0432d6177efc1db8dd1c2510fd68a8c88d0f463`)
+- **QA 主体**：`fpf-qa-bot-huangzuomin[bot]`；Run `42968508888` 的 `actor` 与 `triggering_actor` 均为该 bot，profile=`Library`，16 项 EVID 全 PASS
+- **独立 Review**：`5854472383`，`APPROVED`，`commit_id=81289d4f5ffe6d6db443c8260c7525e0a18adb56`
+- **变更范围**：
+  - `.gitignore`：新增 `.inflow-setup/`、`secrets/`、`*.hex`
+  - `docs/architecture/FPF-AUTONOMOUS-ENGINEERING-COORDINATOR.md`：仅顶部新增 5 行历史快照横幅，正文零改写
+  - `docs/roadmap/FPF-2.0-STANDARDIZATION-ROADMAP.md`：1351 行，含 §8.7 G2–H4 与附录 A 映射
+- **NOT_RUN / 边界**：
+  - G2–H4 七项全部 `PLAN_ONLY`，未实现、未生效、未实机验证
+  - 生产部署与真实计费维持 `NOT_AUTHORIZED`
+  - 本切片为纯文档变更，无部署动作
+- **归档时间**：2026-11-11
