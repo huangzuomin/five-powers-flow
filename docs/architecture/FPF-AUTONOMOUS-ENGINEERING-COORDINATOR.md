@@ -1,5 +1,10 @@
 # FPF Autonomous Engineering Coordinator：五权分立下的自主工程协调与完整交付闭环架构规范
 
+> **⚠️ 文档状态（2026-11-11）：历史阶段快照，不再演进。**
+> 本文是 Issue #68（FPF-AEC Phase A–G）已交付阶段的架构与交付快照，Issue #68 已 CLOSED。
+> FPF 后续演进的唯一主线是 [`docs/roadmap/FPF-2.0-STANDARDIZATION-ROADMAP.md`](../roadmap/FPF-2.0-STANDARDIZATION-ROADMAP.md)；两份文档口径不一致时，以 FPF 2.0 路线图为准。
+> 本文仅保留历史证据价值，不接收新功能设计；其正文未因本次降级而改写。
+
 > **文档版本：** v1.0（架构设计与分阶段研发切片规划提案）  
 > **编制日期：** 2026-10-31  
 > **任务编号：** FPF-AEC-20261031-A  
