@@ -106,7 +106,7 @@ FPF 不计划成为：
 | 仓库可见性与分支保护 | `huangzuomin/five-powers-flow` 当前 `visibility=PUBLIC`；`GET /repos/.../branches/main/protection` 返回 `required_status_checks.contexts=[validate, validate-card]`、`strict=true`、`enforce_admins=true`、`allow_force_pushes=false` | 保护已真实生效；403 属私有阶段的历史约束，不再是当前事实 |
 | 独立 QA 是否平台强制 | `required_approving_review_count=0`；仅 `require_code_owner_reviews=true`，而 `.github/CODEOWNERS` 指向负责人本人 `@huangzuomin` | GitHub 原生 Review 门禁**不强制**任何批准 |
 | `validate-card` 强度 | `packages/fpf_policy/pr_gate.py` 对 `CODE_PR` 要求“不同 GitHub 登录身份、绑定当前 head SHA 的 APPROVED `QA_RESULT` + Artifact 校验”，失败即输出 `::error::[FPF FAIL CLOSED]` | Check 本身是 fail-closed，且在 main 上为 required；但强度完全依赖仓库内策略代码与 workflow 文件 |
-| 策略自保护 | 修改 `packages/fpf_policy/`、`.github/` 或治理文件会走 `POLICY_CHANGE` / `GATE_PR` 路径，最终仍由同一人类账号批准 | 没有平台级第二审批人，也没有密钥级身份分离 |
+| 策略自保护 | 修改 `packages/fpf_policy/`、`.github/` 或治理文件会走 `POLICY_CHANGE` / `GATE_PR`；要求第二名独立批准，但 `sovereign_override: true` 且 `sovereign_authorizer == 作者` 时可由作者本人放行（`pr_gate.py`） | 存在“作者自授权”旁路；没有平台级第二审批人，也没有密钥级身份分离 |
 | 凭据分权 | 仓库内无密钥被跟踪；但本机存在未加密私钥裸放（见 G3 反例） | 未形成强制边界 |
 
 因此 G2 的问题定义在 2026-11-11 收敛为：**check 有强制力，平台原生审批、身份分离与凭据分权没有强制力**。这不是“保护开不开”的问题，而是“谁有资格批准、凭什么批准、密钥放在哪”的问题。
@@ -1000,8 +1000,8 @@ G2 宪制强制力 → G3 凭据与身份边界 → G4 状态机归约 → H1 �
 #### 8.7.2 G2 · 宪制强制力落地
 
 - **落点阶段：** 阶段 2（Control Plane）前置门禁；状态 `PLAN_ONLY`。
-- **问题定义：** 当前强制力由“仓库内 check + 人工纪律”叠加而成。GitHub 原生 `required_approving_review_count=0`，CODEOWNERS 指向负责人本人；修改策略代码的 PR 最终仍由同一账号批准；DEV 与 QA 的“独立身份”只体现为登录名不同，密钥仍在同一台宿主机。
-- **反例证据：** 2026-11-11 实测 `GET /repos/huangzuomin/five-powers-flow/branches/main/protection`：`enforce_admins=true`，但 `required_approving_review_count=0`；`.github/CODEOWNERS` 全部指向 `@huangzuomin`。复盘记载的 `403 Upgrade to GitHub Pro` 发生在私有仓库阶段，当前仓库已 PUBLIC，该报错不再复现——这恰好证明强制力会随仓库可见性与套餐漂移，不能作为宪制基础。
+- **问题定义：** 当前强制力由“仓库内 check + 人工纪律”叠加而成。GitHub 原生 `required_approving_review_count=0`，CODEOWNERS 指向负责人本人；修改策略代码的 PR 虽然要求第二名独立批准，但 `sovereign_override` 允许作者本人放行；DEV 与 QA 的“独立身份”只体现为登录名不同，密钥仍在同一台宿主机。
+- **反例证据：** 2026-11-11 实测 `GET /repos/huangzuomin/five-powers-flow/branches/main/protection`：`enforce_admins=true`，但 `required_approving_review_count=0`；`.github/CODEOWNERS` 全部指向 `@huangzuomin`；`packages/fpf_policy/pr_gate.py` 的 `GATE_PR` 分支在缺少第二批准时，只要 `sovereign_override=true` 且 `sovereign_authorizer == author` 即放行。复盘记载的 `403 Upgrade to GitHub Pro` 发生在私有仓库阶段，当前仓库已 PUBLIC，该报错不再复现——这恰好证明强制力会随仓库可见性与套餐漂移，不能作为宪制基础。
 - **目标行为：** 二选一或叠加：①启用 GitHub Rulesets + required approvals + 独立 QA team，让平台层拒绝“自审自批”；②不依赖套餐，改用“制品签名 + 独立校验器”——QA 产物由独立私钥签名，合并门禁验证签名链与 SHA 绑定，而不是只比对登录名。
 - **验收标准（可测）：**
   1. 无独立 QA 批准的 PR 在平台层无法合并（API 返回 405/422 或 required check 失败），并留存一次真实拒绝记录；
