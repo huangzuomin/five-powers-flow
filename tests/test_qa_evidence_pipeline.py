@@ -97,7 +97,25 @@ class TestDualReviewerGates(unittest.TestCase):
         subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo_dir, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo_dir, capture_output=True, check=True)
         (self.repo_dir / "README.md").write_text("# Repo\n", encoding="utf-8")
-        subprocess.run(["git", "add", "README.md"], cwd=self.repo_dir, capture_output=True, check=True)
+        (self.repo_dir / ".fpf").mkdir()
+        (self.repo_dir / ".fpf" / "stations.yaml").write_text(
+            "version: 1\n"
+            "stations:\n"
+            "  - id: ST-DEV\n"
+            "    kind: dev\n"
+            "    carriers:\n"
+            "      - {type: github-login, value: author-user}\n"
+            "  - id: ST-QA\n"
+            "    kind: qa-evidence\n"
+            "    carriers:\n"
+            "      - {type: github-login, value: qa-bot}\n"
+            "  - id: ST-RULE\n"
+            "    kind: ruling-carrier\n"
+            "    carriers:\n"
+            "      - {type: github-login, value: human-sec-reviewer}\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "README.md", ".fpf/stations.yaml"], cwd=self.repo_dir, capture_output=True, check=True)
         subprocess.run(["git", "commit", "-m", "init"], cwd=self.repo_dir, capture_output=True, check=True)
         self.head_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.repo_dir, capture_output=True, text=True, check=True).stdout.strip()
 
@@ -237,7 +255,7 @@ author: qa-bot
 
     @patch("packages.fpf_policy.qa_artifact.independent_qa_evidence")
     @patch("packages.fpf_coordinator.coordinator.validate_qa_result")
-    def test_gate_pr_sovereign_override_succeeds(self, mock_validate, mock_evidence):
+    def test_gate_pr_sovereign_override_is_rejected(self, mock_validate, mock_evidence):
         mock_evidence.return_value.__enter__.return_value = self.repo_dir
         mock_validate.return_value = []
 
@@ -277,8 +295,11 @@ author: qa-bot
         os.environ["GITHUB_REPOSITORY"] = "org/repo"
         os.environ["FPF_CANDIDATE_REPO"] = str(self.repo_dir)
 
-        res = evaluate(event, reviews, files, set(files))
-        self.assertIn("independently QA verified with human sovereign override", res)
+        # G2 removes the self-authorization branch: the field is not a substitute
+        # for a second independent approval, whatever its value.
+        with self.assertRaises(ValueError) as ctx:
+            evaluate(event, reviews, files, set(files))
+        self.assertIn("no longer a substitute", str(ctx.exception))
 
 
 if __name__ == "__main__":
