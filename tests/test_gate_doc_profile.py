@@ -65,6 +65,27 @@ def test_rename_out_of_governed_tree_is_promoted(tmp_path):
     assert pr_gate.promote_doc_route("POLICY_PR", changed, extra) == "GATE_PR"
 
 
+def test_rename_into_map_files_is_still_promoted():
+    """A standard renamed onto a MAP path must not ride the MAP_PR route."""
+    assert pr_gate.promote_doc_route(
+        "MAP_PR",
+        ["docs/coordination/lessons.md"],
+        {"docs/standards/FPF-STANDARD-2.0.md"},
+    ) == "GATE_PR"
+
+
+def test_bootstrap_route_is_promoted():
+    assert pr_gate.promote_doc_route(
+        "BOOTSTRAP_PR", ["docs/standards/FPF-STANDARD-2.0.md"]
+    ) == "GATE_PR"
+
+
+def test_non_markdown_extension_in_governed_tree_is_promoted():
+    assert pr_gate.promote_doc_route(
+        "POLICY_PR", ["docs/standards/FPF-STANDARD-2.0.markdown"]
+    ) == "GATE_PR"
+
+
 def test_deletion_of_standard_is_promoted(tmp_path):
     repo = _init_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD")

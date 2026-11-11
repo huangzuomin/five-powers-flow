@@ -29,15 +29,20 @@ MAP_FILES = frozenset({"project-map.md", "lessons.md",
 # Governed location of normative standard text. The location *is* the contract:
 # a change that touches this tree (including by rename or deletion) must be
 # adjudicated through the independent-QA route, never an identity-only one.
+#
+# Governance rule: normative text lives under docs/standards/. A document kept
+# elsewhere is by definition not normative and does not carry the DOC gate; if
+# something needs that status it must be moved here, which is itself gated.
 NORMATIVE_STANDARD_PREFIX = "docs/standards/"
 
 
 def is_normative_standard(path: str) -> bool:
+    """Any file in the governed tree, regardless of extension."""
     try:
         normalized = normalize_repo_path(path)
     except ValueError:
         return False
-    return normalized.startswith(NORMATIVE_STANDARD_PREFIX) and normalized.endswith(".md")
+    return normalized.startswith(NORMATIVE_STANDARD_PREFIX)
 
 def _policy_scope(changed: set[str]) -> str:
     """Governing workflow changes require the GATE_PR route, never prose waiver."""
@@ -217,11 +222,15 @@ def touched_paths(base: str, sha: str, repo_dir: str | None = None) -> set[str]:
 def promote_doc_route(pr_type: str, files, extra_paths=None) -> str:
     """Identity-only routing is not available for normative standard changes.
 
-    A normative standard document may not be adjudicated on the identity-only
-    route. Promotion happens on the touched set, so renaming a standard out of
-    the governed tree does not launder it into an unrelated prose change.
+    Every route that does not already demand independent QA is promoted:
+    POLICY_PR and MAP_PR are identity-only, and BOOTSTRAP_PR can add normative
+    text without a QA_RESULT. CODE_PR and GATE_PR already require one, so they
+    keep their kind and the profile binding decides the rest.
+
+    Promotion runs on the touched set, so renaming a standard into another
+    directory (including MAP_FILES) does not launder it into prose.
     """
-    if pr_type != "POLICY_PR":
+    if pr_type in ("GATE_PR", "CODE_PR"):
         return pr_type
     touched = {normalize_repo_path(p) for p in files}
     touched |= {normalize_repo_path(p) for p in (extra_paths or set())}
