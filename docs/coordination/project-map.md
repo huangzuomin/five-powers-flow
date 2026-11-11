@@ -111,3 +111,31 @@
   - 本文件**不产生强制力**；`.fpf/stations.yaml` 与门禁侧的工位身份校验属 G2，尚未实现
   - 生产部署与真实计费 `NOT_AUTHORIZED`
 - **归档时间**：2026-11-12
+
+### [FPF2-G2-20261112] 宪制强制力：工位登记表 + 门禁工位校验 + 废除作者自授权
+- **目标**：把"角色分离"从口头约定变成门禁可判定的强制登记表；废除 GATE_PR 的纯自授权旁路
+- **代码提交**：`2b8f61c1fbcfdf3dca8292c1d2a10b06d0063c54`
+- **主干合并**：`2da17a9e2c7a3f0b3b691440ae03c0b9eb471ced`（PR #85，merge commit）
+- **独立 QA**：Run `43059249170` / Artifact `13873495995` / `evidence_manifest_sha256=a82a950cff7501a0caea5089f996db187df9f8736e15ba08a9398efaca276513`，`task_id=FPF2-G2`，`tested_sha=2b8f61c1`，`runner_sha`=`qa_contract_sha`=`835458b5`，`verdict=PASS`
+- **独立 Review**：`5862053192`（`fpf-qa-bot-huangzuomin[bot]`，APPROVED，钉 `2b8f61c1`）+ `5862054879`（`fpf-reviewer-huangzuomin[bot]`，APPROVED，钉同一 head，承载 `WO-20261112-mechanize-stations-g2` 授权）
+- **变更范围**：新增 `.fpf/stations.yaml`（3 个机器工位）与 `packages/fpf_policy/stations.py`；`pr_gate.py` 增加 R0–R5 并**删除 `sovereign_override` 分支**；`tests/test_gate_stations.py` 19 用例；两个既有测试改造
+- **强制规则**：R0 登记表取自 `git show {base}:.fpf/stations.yaml`（不读候选 head，改表者不能即时自我授权）；R1 QA_RESULT 签发者须为 `qa-evidence` 工位；R2 作者不得属 `{qa, qa-evidence, ruling-carrier}`；R3 GATE_PR 第二批准须为 `ruling-carrier` 且与 R1 工位不同；R5 `sovereign_override` 键存在即拒
+- **本地验证**：`python -m unittest discover -s tests -p "test_*.py"` = **211 passed**
+- **NOT_RUN / 边界**：
+  - 工位校验只作用于 `CODE_PR` / `GATE_PR`；`MAP_PR` / `POLICY_PR` / `BOOTSTRAP_PR` 有意不扩围
+  - `required_approving_review_count` 仍为 `0`，见下条探针结论；roadmap §8.7.2 的 G2 整体验收**未闭合**
+  - `.fpf/stations.yaml` 只登记 GitHub 登录名，ChatGPT 指挥官工位与 Codex worker 工位**无机器载体**
+  - 生产部署与真实计费 `NOT_AUTHORIZED`；G3–H4 `PLAN_ONLY`
+- **归档时间**：2026-11-12
+
+### [FPF2-GATE-PROBE-20261112] 分支保护 `required_approving_review_count` 可达性实测（一次性探针）
+- **结论**：`FAIL_CLOSED` —— GitHub 原生 `required_approving_review_count=1` 在当前身份结构下**不可达**；已回滚 `count=0`，未留死锁
+- **探针**：PR #86 `fpf/gate-probe-20261112`（head `84a5c0b9`，仅新增一个临时文档），验证后关闭并删除分支与 worktree
+- **实测序列**：基线（`count=0` + reviewer2 APPROVED）→ `mergeStateStatus=CLEAN`；PATCH `count=1` 后 → `BLOCKED` / `reviewDecision=REVIEW_REQUIRED`；回滚 `count=0` 后 → 恢复 `CLEAN`
+- **根因**：`GET /repos/.../collaborators/fpf-reviewer-huangzuomin[bot]/permission` 返回 `{"permission":"none"}`，review 的 `authorAssociation=NONE`。GitHub 原生 required review 只统计**具备仓库写权限**身份的批准；App 安装身份不满足
+- **附带排除**：`.github/CODEOWNERS` 全部自指 `@huangzuomin`，若在 `count=1` 同时保留 `require_code_owner_reviews=true`，将要求作者批准自己的 PR → 必然永久死锁；故收紧尝试时该项显式置 `false`
+- **回滚后稳定配置**：`count=0`、`dismiss_stale_reviews=true`、`require_code_owner_reviews=true`（`count=0` 下不生效）、`require_last_push_approval=false`、required checks `validate` + `validate-card`（`strict=true`）、`enforce_admins=true`、禁 force push / 禁删除
+- **证据**：`.fpf-runtime/evidence/20261112-gov-doc-profile/GATE-PROBE-20261112.md`（未跟踪）
+- **待负责人裁定**：① 机器账号方案（write 协作者，`count=1` 可达但引入长期人格式凭据）；② 平台门禁为准（维持 `count=0`，以 `validate-card` 为唯一强制点，并改写 §8.7.2 该条）；③ 重构 CODEOWNERS 指向真实非作者账号后与 ① 组合
+- **NOT_RUN / 边界**：本轮只验证 App 身份；机器账号方案未创建、未验证
+- **归档时间**：2026-11-12
