@@ -815,6 +815,8 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 
 **优先级：P0｜2.0-alpha 的基础**
 
+**本阶段并入复盘项：** H4（范围修正协议 `SCOPE_AMEND`，`PLAN_ONLY`）。协议与 Schema 在阶段 1 定义，强制拦截依赖 G2/G4。
+
 目标：建立与外部模型和平台无关的确定性核心。
 
 交付物：
@@ -837,6 +839,8 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 ### 阶段 2：Control Plane 与可靠协调（落地对账恢复与 Transactional Outbox）
 
 **优先级：P0/P1｜2.0-alpha**
+
+**本阶段并入复盘项：** G2（宪制强制力，前置）、G3（凭据与身份边界）、G4（状态机归约接入）、H1（项目注册的控制面部分）；均为 `PLAN_ONLY`。
 
 目标：让任务可以安全派发、观测、恢复和有界重试，落地 Transactional Outbox 与 Provider 幂等分级对账协议。
 
@@ -864,6 +868,8 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 
 **优先级：P1｜2.0-beta**
 
+**本阶段并入复盘项：** H2（worktree 生命周期，`PLAN_ONLY`）。
+
 目标：让 Agent、模型和执行环境可以替换，保持 Windows 11 原生生产级一级支持与 Docker 隔离执行。
 
 交付物：
@@ -890,6 +896,8 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 ### 阶段 4：Evidence Engine & Conformance Kit（确定性契约测试与模型评测严格分轨）
 
 **优先级：P1｜2.0-rc**
+
+**本阶段并入复盘项：** H3（部署就绪门禁，`PLAN_ONLY`）；H1 的 Conformance 校验部分。
 
 目标：把“能执行”升级为“可证明、可复核、可移植”，严格剥离确定性系统契约测试与概率性模型评测。
 
@@ -926,6 +934,8 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 ### 阶段 5：Bootstrap、发行与生态兼容
 
 **优先级：P1/P2｜2.0.0 稳定版**
+
+**本阶段并入复盘项：** H1（`projects/<id>/project.yaml` 注册表与发行校验，`PLAN_ONLY`）。
 
 目标：使 FPF 能够被第三方项目独立安装、配置、升级和验证。
 
@@ -969,6 +979,123 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 - Agent 可以诊断、提出修复和准备发布方案。
 - 合并、发布和生产写操作仍须经过明确的人类授权或另行批准的受限策略。
 - 生产自动化不能成为绕过五权分立的旁路。
+
+### 8.7 复盘新增项：G2–H4（2026-11-11 并入）
+
+本节把 2026-11-10 复盘出的 7 项挂入既有阶段，不新开第三份文档。**截至 2026-11-11，7 项全部为 `PLAN_ONLY`：没有任何一项已经实现、生效或通过实机验证。**
+
+#### 8.7.1 依赖顺序与并行边界
+
+强制力生效顺序（不是文档写作顺序）：
+
+```text
+G2 宪制强制力 → G3 凭据与身份边界 → G4 状态机归约 → H1 项目注册
+→ H2 worktree 生命周期 → H3 部署就绪门禁 → H4 范围修正协议
+```
+
+- **为什么 G2 排第一：** 没有平台级或密码学级强制力时，G3–H4 的拦截都只是建议。`validate-card` 再严格，也建立在“仓库内策略代码不被改弱、workflow 不被停用、审批人不兼任”的前提上，而这些前提当前没有第二道门。
+- **可并行起草：** H1 的 manifest 字段、H2 的 `.fpf-worktree.json` 格式、H4 的 `SCOPE_AMEND` Schema 可在阶段 1–2 并行设计；H3 的容器 smoke 脚本可先在 geo-service-core 试点，但“事件触发 + 强制断言”必须等 G4 提供事件源。
+- **不可并行生效：** G4 的 reducer 必须消费 G3 定义的 Principal/凭据事件；H2 的自动回收必须由 G4 的 merge 事件驱动；H3 的部署门禁必须由 G4 的 release 事件驱动。
+
+#### 8.7.2 G2 · 宪制强制力落地
+
+- **落点阶段：** 阶段 2（Control Plane）前置门禁；状态 `PLAN_ONLY`。
+- **问题定义：** 当前强制力由“仓库内 check + 人工纪律”叠加而成。GitHub 原生 `required_approving_review_count=0`，CODEOWNERS 指向负责人本人；修改策略代码的 PR 最终仍由同一账号批准；DEV 与 QA 的“独立身份”只体现为登录名不同，密钥仍在同一台宿主机。
+- **反例证据：** 2026-11-11 实测 `GET /repos/huangzuomin/five-powers-flow/branches/main/protection`：`enforce_admins=true`，但 `required_approving_review_count=0`；`.github/CODEOWNERS` 全部指向 `@huangzuomin`。复盘记载的 `403 Upgrade to GitHub Pro` 发生在私有仓库阶段，当前仓库已 PUBLIC，该报错不再复现——这恰好证明强制力会随仓库可见性与套餐漂移，不能作为宪制基础。
+- **目标行为：** 二选一或叠加：①启用 GitHub Rulesets + required approvals + 独立 QA team，让平台层拒绝“自审自批”；②不依赖套餐，改用“制品签名 + 独立校验器”——QA 产物由独立私钥签名，合并门禁验证签名链与 SHA 绑定，而不是只比对登录名。
+- **验收标准（可测）：**
+  1. 无独立 QA 批准的 PR 在平台层无法合并（API 返回 405/422 或 required check 失败），并留存一次真实拒绝记录；
+  2. `required_approving_review_count >= 1` 且批准人 ≠ PR 作者 ≠ 策略修改人；或签名校验器对未签名/错签制品返回非零退出码；
+  3. 修改 `packages/fpf_policy/`、`.github/` 的 PR 需要两名不同身份批准，测试覆盖“同一人二次批准被拒”。
+- **依赖：** G3 定义 Principal 与密钥归属；H1 定义项目边界。
+- **与既有阶段边界：** 阶段 2 已有人工审批节点，G2 只补“平台/密码学强制”，不重写 24 状态机。
+
+#### 8.7.3 G3 · 凭据与身份边界
+
+- **落点阶段：** 阶段 2；状态 `PLAN_ONLY`。
+- **问题定义：** 仓库可以做到零跟踪密钥，但开发机上仍可能存在未加密、未忽略、权限过宽的私钥；bot token、签发私钥与 DEV 环境共享同一文件系统，所谓“独立 QA 身份”没有物理边界。
+- **反例证据：** 本机 `D:\SSOT\Work\FPF自动化开发工作流\.inflow-setup\issuer_private_key.hex`，64 字节 Ed25519 种子，未加密、未跟踪；2026-11-11 开工时受版本控制的 `.gitignore` 未覆盖 `.inflow-setup/`。同目录还有 `collector_token.txt`（55 字节）。本 PR 的 Phase 0 提交已补 `.gitignore`（`.inflow-setup/`、`secrets/`、`*.hex`），但**密钥未轮换，按已暴露处理**。
+- **目标行为：** 仓库零密钥；merge/governance/QA bot token 只进 CI secrets 或 OS 凭据库；pre-commit 与 CI 双密钥扫描；签发私钥不落盘到工作区；轮换与吊销有可核验记录。
+- **验收标准（可测）：**
+  1. `git ls-files` 与 `git grep` 对私钥模式零命中；
+  2. pre-commit 对“故意植入的测试私钥”返回非零并阻断提交（有自动化用例）；
+  3. CI secret scanning 在 PR 上启用，命中即 fail-closed；
+  4. 受影响私钥完成轮换，旧公钥指纹进入吊销列表，轮换事件有 SHA/时间/操作者记录；
+  5. QA bot 私钥只存在于 OS 凭据库或 CI secret，`Get-ChildItem` 在工作区零命中。
+- **依赖：** G2（身份与审批模型）。
+- **与既有阶段边界：** 不替代阶段 3 的 Credential Broker 设计；G3 先解决“静态密钥不落盘”，Broker 解决“运行时短时令牌”。
+
+#### 8.7.4 G4 · 状态机归约接入
+
+- **落点阶段：** 阶段 2（与 §4.1 对账恢复协议对接）；状态 `PLAN_ONLY`。
+- **问题定义：** 24 状态机已作为库存在（`packages/fpf_coordinator/dispatch/`，含 CAS journal 与测试），但没有消费 GitHub 事件；任务状态由人/Agent 手写卡片和地图维护，人的记忆与仓库事实之间没有自动对账。
+- **反例证据：** `docs/coordination/project-map.md` 的 `DONE / PASS / MERGED / DEPLOYED` 全部是手写表格；PR #67 的 `Draft/BEHIND` 是本次开工靠 `gh pr view` 人工巡检才发现，不是系统告警；`dispatch` 包没有任何 webhook/event 消费者。
+- **目标行为：** GitHub Issue/PR/Review/CheckRun/WorkflowRun 事件 → 规范化 `Task Event` → 纯函数 reducer → 只读投影；人不再手写状态；投影与远端事实不一致时自动 `BLOCKED` 并生成对账包。
+- **验收标准（可测）：**
+  1. 同一组事件重放两次得到逐字节相同的投影；
+  2. 重复事件、乱序事件、过期授权、SHA 漂移均有确定性测试；
+  3. 至少一个真实 PR 从 `DRAFT_WORK_ORDER` 到 `MERGED` 全程由事件驱动，零人工状态编辑；
+  4. 人为篡改投影后，对账任务能在一次轮询内发现并 `BLOCKED`；
+  5. reducer 不直接调用 GitHub、模型、文件系统或网络（静态检查）。
+- **依赖：** G3（Principal/凭据事件）、§4.1 的两层状态机与探针协议。
+- **与既有阶段边界：** G4 不新增第二套状态机；它把现有 24 状态机接到事件源，并复用 §4.1 的 `Reconciliation Protocol` 处理未知结果。
+
+#### 8.7.5 H1 · 项目注册与控制面隔离
+
+- **落点阶段：** 阶段 2（控制面隔离）与阶段 5（发行校验）；状态 `PLAN_ONLY`。
+- **问题定义：** FPF 没有项目注册表，无法从仓库事实回答“这个项目是否受 FPF 管理、用哪个后端、跑哪个 Profile、允许改哪些路径”。控制面仓库也没有机制阻止业务代码混入。
+- **反例证据：** 2026-11-11 在 main 上 `Test-Path .fpf/project.yaml` 为 `False`；仓库不存在 `projects/<id>/` 目录；`docs/BOOTSTRAP.md` 描述的初始化产物未以 manifest 形式提交，Bootstrap 结果无法被后续门禁复用。
+- **目标行为：** 每个受管项目有 `projects/<id>/project.yaml`（项目 ID、仓库、治理后端、默认 Profile、allowed_paths、负责人、预算/TTL）；控制面仓库零业务代码，由 CI 路径白名单校验；`fpf project validate` 可离线校验。
+- **验收标准（可测）：**
+  1. 新项目初始化后生成 `projects/<id>/project.yaml`，`fpf project validate` 退出码 0；
+  2. 控制面仓库出现业务代码路径时 CI 失败（有反例用例）；
+  3. manifest 与 PR 的 `task_id`、`allowed_paths`、Profile 不一致时 `validate-card` 阻断；
+  4. 至少一个外部项目以 manifest 接入并通过 Conformance（阶段 5）。
+- **依赖：** 阶段 1 的 Project Manifest Schema；G2 的项目级审批。
+- **与既有阶段边界：** 不替代 Bootstrap；H1 只定义“注册与隔离事实”，Bootstrap 负责“生成与迁移”。
+
+#### 8.7.6 H2 · worktree 生命周期
+
+- **落点阶段：** 阶段 3（Portable Execution Runtime）；状态 `PLAN_ONLY`。
+- **问题定义：** worktree 创建后没有标记、没有 TTL、没有回收触发条件，合并/放弃的任务长期占用磁盘与分支命名空间，dirty worktree 还可能被误当成有效工位。
+- **反例证据：** 2026-11-10 复盘实测跨仓库 196 个 worktree、19 个 dirty、约 20–38 GB；2026-11-11 本机 `git worktree list` 仍有 18 条记录（含主工作区），`_worktrees/` 占 0.4 GB，且无任何自动回收记录。
+- **目标行为：** 每个 worktree 带 `.fpf-worktree.json`（task_id、base_sha、branch、owner、created_at、ttl、state）；merge 事件把 state 置为 `RECLAIMABLE`；回收必须同时满足“工作树干净、无未推送提交、分支已合并”三条件并受 TTL 约束；默认 dry-run，删除留审计。
+- **验收标准（可测）：**
+  1. 创建 worktree 自动写入标记，字段缺一即失败；
+  2. merge 事件后标记变为 `RECLAIMABLE`；
+  3. 三条件任一不满足时回收被拒绝（3 个独立测试）；
+  4. TTL 到期只告警，不自动删除 dirty/未合并 worktree；
+  5. 每次回收产出审计记录（路径、branch、SHA、原因、操作者）与回收前后磁盘报告。
+- **依赖：** G4 的 merge 事件；阶段 3 的 Runner 生命周期接口。
+- **与既有阶段边界：** 不删除任何现有 worktree；H2 只定义未来的标记、判定与回收协议。
+
+#### 8.7.7 H3 · 部署就绪门禁
+
+- **落点阶段：** 阶段 4（Evidence Engine）；状态 `PLAN_ONLY`。
+- **问题定义：** “迁移脚本打印 PASS”不等于“目标库已到 head”。部署前没有容器 smoke、没有 `alembic_version == head` 断言，迁移失败会被上层的成功输出掩盖。
+- **反例证据：** 复盘记录：部署流程打印 `migrate PASS`，但 `.53` 实库 `alembic_version` 仍为 `0036`；geo-service-core PR #358 的背景核查显示 8001 未监听、`inflow_*` 六表不存在，最终以新增 `0037_inflow_data_plane_tables` 迁移补救（PR #358 合并于 2026-11-11T03:07:39Z，merge commit `fd7bc736999cd8ad75b2bdd8cd8de6c80bba9106`）。
+- **目标行为：** diff 命中 `infra/`、`backend/migrations/` 或部署编排文件时，强制在目标预发环境执行：①容器启动 smoke（健康端点/端口监听）；②`alembic_version == head` 断言；③关键表存在性断言。证据绑定被测 SHA、镜像摘要与数据库版本。
+- **验收标准（可测）：**
+  1. 门禁在真实预发库上运行，输出含 `tested_sha`、`image_digest`、`alembic_version`、`head`；
+  2. 注入“版本落后一档”的测试库时门禁返回非零并阻断；
+  3. 只改文档/不影响 infra 的 PR 不触发该门禁（避免形式主义）；
+  4. 部署授权仍由人类签署，门禁只证明“就绪”，不代替部署批准。
+- **依赖：** G4 的 release/deploy 事件；阶段 4 的 Evidence Envelope 与 Artifact 校验。
+- **与既有阶段边界：** 不新增部署自动化；H3 是“部署前必须存在的证据断言”，生产部署与真实计费仍 `NOT_AUTHORIZED`。
+
+#### 8.7.8 H4 · 范围修正协议
+
+- **落点阶段：** 阶段 1（Protocol & Core Kernel）；状态 `PLAN_ONLY`。
+- **问题定义：** 交付过程中扩大范围时，没有事前授权卡片；范围扩张只能在新 PR 描述里事后解释，`allowed_paths` 与 `SCOPE_GRANT` 失去约束力。
+- **反例证据：** geo-service-core PR #358 在“INF-COLLECTOR-01 部署启用”中新增 `0037_inflow_data_plane_tables` 迁移；其前序交付 PR #357 的范围不含该 schema 变更，范围扩张仅由 PR #358 的正文事后说明，没有事前 `SCOPE_AMEND`。
+- **目标行为：** 新增 `SCOPE_AMEND` 卡片：原工作令 ID/SHA、新增范围、理由、风险评估、请求人、人类批准人、生效基线 SHA、有效期；必须在越界 diff 进入 review 之前存在并被门禁校验；拒绝“先改后补”。
+- **验收标准（可测）：**
+  1. diff 超出 `allowed_paths` 且无有效 `SCOPE_AMEND` 时，`validate-card` 返回非零；
+  2. `SCOPE_AMEND` 必须绑定 base SHA、批准人与工作令版本，字段缺失即拒绝；
+  3. 卡片内容寻址（payload_digest），修改后旧批准自动失效；
+  4. 用 0037 类场景做回归用例：先有 amend 才允许迁移文件进入 diff。
+- **依赖：** 阶段 1 的 Scope Grant 契约；G2/G4 提供强制拦截与事件记录。
+- **与既有阶段边界：** 不放宽 `allowed_paths`；H4 只提供“合法的范围变更通道”，不提供静默豁免。
 
 ---
 
@@ -1078,6 +1205,13 @@ Profile 由任务风险、技术范围和验收条件决定。不得通过选择
 | P2 | GitLab 等其他治理后端 | GovernanceBackend 稳定 | 平台可移植 |
 | P2 | 托管 Runner、多机调度 | Runner / Control Plane 稳定 | 组织级并发 |
 | P2 | Production Feedback Loop | 2.0 Stable | 持续工程扩展 |
+| P0 | G2 宪制强制力落地（`PLAN_ONLY`） | G3 身份模型、H1 项目边界 | 平台/密码学强制门禁 |
+| P0 | G3 凭据与身份边界（`PLAN_ONLY`） | G2 | 仓库与工作区零静态密钥 |
+| P0 | G4 状态机归约接入（`PLAN_ONLY`） | G3、§4.1 对账协议 | 事件驱动状态投影 |
+| P1 | H1 项目注册与控制面隔离（`PLAN_ONLY`） | 阶段 1 Project Manifest | 项目边界可校验 |
+| P1 | H2 worktree 生命周期（`PLAN_ONLY`） | G4 merge 事件、阶段 3 Runner | 工位可标记、可回收 |
+| P1 | H3 部署就绪门禁（`PLAN_ONLY`） | G4、阶段 4 Evidence | 部署前 smoke 与迁移断言 |
+| P0/P1 | H4 范围修正协议（`PLAN_ONLY`） | 阶段 1 Scope Grant | 越界必须事前授权 |
 
 实施时允许并行开发，但接口和验收依赖必须先确定。不得以并行开发为理由，让多个模块分别定义任务状态、证据字段和授权语义。
 
