@@ -350,7 +350,7 @@ def verify_repo(repo: Path) -> tuple[dict[str, Any], bytes]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="验证 FPF-STANDARD-2.0 文档")
-    parser.add_argument("--repo", required=True, help="仓库根目录")
+    parser.add_argument("--repo", default=".", help="仓库根目录（缺省为当前工作目录）")
     parser.add_argument("--out", help="同时写出确定性 JSON 的路径")
     args = parser.parse_args(argv)
 
