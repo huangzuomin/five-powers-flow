@@ -35,3 +35,8 @@ Thumbs.db
 coordination-ledger.local.json
 .fpf-runtime/
 .fpf-state/
+
+# Local secret material (added 2026-11-11 after issuer_private_key.hex exposure)
+.inflow-setup/
+secrets/
+*.hex
