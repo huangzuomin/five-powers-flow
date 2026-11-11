@@ -1284,3 +1284,68 @@ FPF 的长期价值不在于它能调度多少 Agent，而在于它能否把可�
 **最终目标：任何一个符合 FPF 规范的项目，都可以在不依赖特定模型、特定对话线程或特定开发者个人经验的情况下，建立一套可验证、可执行、可审计、可持续演进的 Agent 原生软件工程体系。**
 
 这才是 FPF 从项目内工具走向标准化基础设施的标志。
+
+---
+
+## 附录 A · AEC 已交付能力 → FPF 2.0 六平面映射
+
+> **用途：** 消除 AEC 五层架构与 2.0 六平面的口径冲突，回答“哪些已有实物可直接复用、哪些只是设计、哪些必须重做”。
+> **事实来源：** `docs/architecture/FPF-AUTONOMOUS-ENGINEERING-COORDINATOR.md`、`docs/reports/FPF-AEC-DELIVERY-REPORT.md`、`docs/coordination/project-map.md`、本仓库 `packages/` 与 `tests/`、PR #69–#76 的合并记录。
+> **时点：** 2026-11-11，main @ `9d96b37`。
+
+### A.1 AEC 五层架构与 2.0 六平面的对应关系
+
+本路线图 §3 的“六平面”指：Protocol & Conformance Foundation、Governance Plane、Control Plane、Execution Plane、Evidence & Assurance Plane、Integration Plane；Project Context / Observability / Agent Evaluation 为横向能力。
+
+| AEC 五层（实现视角） | FPF 2.0 对应层 | 对应关系 | 差异 |
+|---|---|---|---|
+| A. Authority Plane（ScopeGrant、Baseline、凭据 Broker、人工门禁） | Governance Plane + Protocol Foundation | 授权、主体、角色、拒绝原因归 Governance；ScopeGrant/Baseline 的字段与版本归 Protocol | AEC 把“契约”隐含在实现里，2.0 要求独立版本化 Schema 与拒绝原因枚举 |
+| B. Orchestration Plane（Daemon、Heartbeat、状态机、并发/熔断） | Control Plane | 一对一 | AEC 已有 24 状态机与 CAS journal，但没有事件源接入（G4） |
+| C. Execution Plane（Provider Registry、ChatGPT Web、Codex DEV/QA） | Execution Plane + Integration Plane | 执行隔离归 Execution；Provider/后端适配归 Integration | AEC 的适配器契约可复用；真实在线会话仍 `NOT_RUN` |
+| D. Evidence Plane（EVID、SHA-256、Artifact、裁决对账） | Evidence & Assurance Plane | 一对一 | AEC 的 `qa_artifact`/`qa_collector` 是实物；五维证据模型尚未落成独立 Verifier |
+| E. Canonical State Plane（GitHub SSOT + 本地 SQLite Journal） | Governance Plane / Integration Plane + Control Plane | 远端正式事实归 Governance/Integration；本地 journal 归 Control Plane | AEC 把“权威事实”与“本地索引”画在同一层；2.0 明确二者不得混为同一权威源（§4.1） |
+| （无） | Protocol & Conformance Foundation | AEC 只有架构文档与 e2e 测试，没有独立 Conformance Suite | 2.0 新增；属于缺口，不是重复建设 |
+| （无） | 横向：Project Context / Observability / Agent Evaluation | AEC 有 Context 片段与成本预算，但没有项目注册表、统一观测与模型评测 | 2.0 新增；H1 与阶段 4 承接 |
+
+**口径结论：** AEC 五层是“单项目、单后端、实现导向”的架构；2.0 六平面是“多项目、多后端、标准导向”的架构。二者不是替代关系，AEC 的 B/C/D 三层可直接映射并复用；A 与 E 需要按 2.0 的“协议/治理/集成”拆分；Protocol Foundation 与横向能力是 AEC 未覆盖的新增面。
+
+### A.2 AEC Phase A–G 逐条产出物映射
+
+| 阶段 | 产出物（仓库内实物） | PR / 合并 SHA | 六平面落点 | 状态 | 复用结论 |
+|---|---|---|---|---|---|
+| **Phase A** 架构契约 | `docs/architecture/FPF-AUTONOMOUS-ENGINEERING-COORDINATOR.md`；Issue #68 分阶段规划 | PR #69 / `2327ac1f3641` | Protocol Foundation（设计）+ Governance（五权）+ Control（状态定义） | 仅设计 | 作为历史设计输入复用；实现口径以 2.0 路线图为准 |
+| **Phase B** 协调内核 | `packages/fpf_coordinator/dispatch/{states,core,journal}.py`；`tests/test_coordinator_kernel.py` | PR #70 / `ad7e904ad33f` | Control Plane | 已有实物（库） | 直接复用 24 状态机与 CAS journal；补事件源（G4） |
+| **Phase C** Provider 适配器 | `packages/fpf_runtime/adapters/{base,chatgpt_web,codex_worker,registry,smoke}.py`；`browser_transport/transport.py`；`tests/test_provider_adapters.py` | PR #71 / `96b38d0f5765` | Execution + Integration | 部分实物（契约/Mock 已测，真实会话 `NOT_RUN`） | 复用接口与注册表；真实登录态会话需另立切片验证 |
+| **Phase D** QA 证据闭环 | `packages/fpf_policy/{pr_gate,qa_artifact}.py`；`tests/test_qa_evidence_pipeline.py` | PR #72 / `437d6dd24fd6` | Evidence & Assurance + Governance | 已有实物 | 直接复用 `validate-card` 的独立 Review + Artifact 校验；补五维 Verifier |
+| **Phase E** 安全与隔离 | `packages/fpf_runtime/security/{credential_broker,env_sanitizer,windows_isolation}.py`；`hook_guard_dev.py` | PR #73 / `15e0c1772248` | Execution（隔离）+ Governance（凭据） | 部分实物（抽象/单测；WFP 内核驱动 `NOT_RUN`） | 复用 Broker/净化器骨架；实机 ACL/WFP 需阶段 3 验证 |
+| **Phase F** 守护与恢复 | `packages/fpf_runtime/daemon/{config,reconciliation,scheduler,server}.py`；`tests/test_daemon_reconciliation.py` | PR #74 / `2ef69643efd4` | Control Plane | 部分实物（单机骨架；跨机/长期运行 `NOT_RUN`） | 复用对账骨架；接 G4 事件与租约实机测试 |
+| **Phase G** Golden Path | `tests/test_golden_path_e2e.py`；`docs/reports/FPF-AEC-DELIVERY-REPORT.md` | PR #75 / `bac0088055d8` | Evidence + Control（端到端） | 已有实物（模拟链路） | 复用为回归基线；不得当作真实外部 Provider 验收 |
+
+> 说明：Phase G 的交付报告自身列明三项 `NOT_RUN`：WFP 内核驱动实机安装、真实 ChatGPT 在线长会话、多操作系统本地实机交叉运行。本表沿用该边界，不把 e2e 模拟升级为“真实集成已完成”。
+
+### A.3 结论：复用、补齐、不要重做
+
+**可直接复用（不重写）：**
+
+1. `packages/fpf_coordinator/dispatch/` 的 24 状态定义、纯函数归约与 CAS journal——2.0 的 Control Plane 内核直接采用。
+2. `packages/fpf_policy/{pr_gate,qa_artifact,qa_collector}.py` 的“独立身份 Review + Artifact 绑定 SHA”校验链——2.0 的 Evidence 门禁直接采用。
+3. `packages/fpf_gates/hook_guard_dev.py` 与 `pre_handoff.py` 的本地快速拦截。
+4. `packages/fpf_runtime/daemon/` 的调度、heartbeat、崩溃对账骨架。
+5. `tests/test_golden_path_e2e.py` 的正向/返工/熔断三条链路，作为 2.0 回归基线。
+
+**必须补齐（AEC 未交付）：**
+
+1. GitHub 事件源与状态投影（G4）——把已有状态机接上真实事件，而不是再写一套状态机。
+2. 项目注册表与控制面隔离（H1）。
+3. worktree 标记、三条件判定与 TTL 回收（H2）。
+4. 部署就绪门禁与迁移版本断言（H3）。
+5. `SCOPE_AMEND` 范围修正协议（H4）。
+6. 平台/密码学级强制力与密钥轮换（G2、G3）。
+7. 独立 Conformance Suite、版本兼容矩阵、Project Context / Observability / Agent Evaluation 横向能力（§3、§9、阶段 4）。
+
+**明确不要重做：**
+
+1. 不新写第二套任务状态机；G4 只做事件接入与投影。
+2. 不另建第二套 QA 证据校验器；H3 复用现有 Evidence Envelope 与 Artifact 校验。
+3. 不重新实现 Provider 适配器骨架；真实会话验证是“补验证”，不是“重写接口”。
+4. 不把 AEC 的历史文档当成现行规范；其正文保持原样，仅以状态横幅降级（见 `docs/architecture/FPF-AUTONOMOUS-ENGINEERING-COORDINATOR.md` 顶部）。
