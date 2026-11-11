@@ -1,0 +1,25 @@
+# FPF station registry (G2).
+#
+# Read by the gate from the PR **base** commit. A change to this file is judged
+# by the registry already on the base branch, and its new relations take effect
+# only after the change is merged.
+#
+# A GitHub login may appear exactly once across the whole file (compared
+# case-insensitively, with the full login kept including any "[bot]" suffix).
+version: 1
+stations:
+  - id: ST-DEV-AUTHOR-01
+    kind: dev
+    carriers:
+      - type: github-login
+        value: huangzuomin
+  - id: ST-QA-EVIDENCE-01
+    kind: qa-evidence
+    carriers:
+      - type: github-login
+        value: "fpf-qa-bot-huangzuomin[bot]"
+  - id: ST-RULING-CARRIER-01
+    kind: ruling-carrier
+    carriers:
+      - type: github-login
+        value: "fpf-reviewer-huangzuomin[bot]"

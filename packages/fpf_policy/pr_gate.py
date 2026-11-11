@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 import yaml
 from packages.fpf_coordinator import coordinator
 from packages.fpf_policy.protected import is_protected, normalize_repo_path
+from packages.fpf_policy import stations
 
 BOOT_FILES = frozenset({
     "agents.md", "docs/coordination/project-map.md",
@@ -260,14 +261,26 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
     card = yaml_card(body,kind)
     pr_type = classify(files,kind,baseline_files,branch)
     pr_type = promote_doc_route(pr_type, files, extra_paths)
+    repo_dir = Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
     if pr_type in ("CODE_PR", "GATE_PR"):
         reviewer, qa = verified_reviewer(reviews, author, sha)
+        # G2: a QA verdict must be signed by a registered qa-evidence station, and
+        # the author must never resolve to a QA station. The registry is read from
+        # the base commit, so a change set cannot rewrite its own authority.
+        registry = stations.load_registry(repo_dir, base)
+        qa_station = registry.require(reviewer, {"qa-evidence"}, "QA signer")
+        registry.reject_qa_kind(author, "PR author")
     else:
         reviewer = authenticated_approval(reviews, author, sha)
     if pr_type == "GATE_PR":
         _exact_card_diff(card, files, sha, base)
         if card.get("risk_acknowledged") is not True:
             raise ValueError("GATE_PR must explicitly acknowledge policy risk")
+        if "sovereign_override" in card:
+            raise ValueError(
+                "sovereign_override is no longer a substitute for a second independent "
+                "approval; remove the field and obtain a second APPROVED review"
+            )
         if str(qa.get("task_id")) != str(card.get("task_id")):
             raise ValueError("GATE_PR QA task ID mismatch")
         latest = {}
@@ -280,10 +293,13 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
                   and str(review.get("state") or "").upper() == "APPROVED"
                   and str(review.get("commit_id") or "").lower() == sha]
         if not second:
-            if not (card.get("sovereign_override") is True and str(card.get("sovereign_authorizer") or "").casefold() == author.casefold()):
-                raise ValueError("GATE_PR requires second independent APPROVED review")
+            raise ValueError("GATE_PR requires second independent APPROVED review")
+        second_station = registry.require(second[0], {"ruling-carrier"}, "second approval")
+        if second_station.id == qa_station.id:
+            raise ValueError(
+                "second approval must come from a station different from the QA signer"
+            )
         from packages.fpf_policy.qa_artifact import independent_qa_evidence
-        repo_dir = Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
         with independent_qa_evidence(repo=os.environ["GITHUB_REPOSITORY"], qa=qa,
                 reviewer=reviewer, tested_sha=sha, task_id=str(card["task_id"]),
                 token=os.environ.get("GH_TOKEN",""), repository_dir=repo_dir) as evidence_dir:
@@ -293,8 +309,6 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
                 repo_path=repo_dir,evidence_dir=evidence_dir)
             if errs:
                 raise ValueError("GATE_PR independent QA rejected: " + "; ".join(errs))
-        if not second:
-            return "GATE_PR independently QA verified with human sovereign override"
         return "GATE_PR independently QA verified and dual-approved"
     if pr_type == "CODE_PR":
         if str(card.get("author") or "").casefold() != author.casefold():
@@ -302,7 +316,7 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
         if str(card.get("tested_code_sha") or "").lower() != sha:
             raise ValueError("DEV_HANDOFF head SHA mismatch")
         errs = coordinator.validate_dev_handoff(
-            card, repo_path=Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd()))
+            card, repo_path=repo_dir)
         if errs:
             raise ValueError("DEV_HANDOFF invalid: " + "; ".join(errs))
         if str(qa.get("task_id")) != str(card.get("task_id")):
@@ -310,7 +324,6 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
         if str(qa.get("runner_sha")) == sha or str(qa.get("qa_contract_sha")) == sha:
             raise ValueError("QA toolchain must be pinned independently of PR tested code")
         from packages.fpf_policy.qa_artifact import independent_qa_evidence
-        repo_dir = Path(os.environ.get("FPF_CANDIDATE_REPO") or os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
         with independent_qa_evidence(
             repo=os.environ["GITHUB_REPOSITORY"], qa=qa,
             reviewer=reviewer, tested_sha=sha,

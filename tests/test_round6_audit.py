@@ -35,21 +35,48 @@ class TestSixthAudit(unittest.TestCase):
             _exact_card_diff({**card,"changed_files":["docs/b.md"]},["docs/a.md"],head,base)
 
     def test_policy_gate_requires_two_reviewers_and_qa(self):
-        head,base="a"*40,"b"*40
-        payload="kind: POLICY_CHANGE\ntask_id: POLICY01\nrisk_acknowledged: true\n" + (
-            "tested_code_sha: "+head+"\nbaseline_sha: "+base+
-            "\nchanged_files:\n  - packages/fpf_policy/pr_gate.py\n")
-        event={"pull_request":{"head":{"sha":head,"ref":"fix/policy"},
-               "base":{"sha":base},"user":{"login":"dev-author"},
-               "body":"\x60\x60\x60yaml\n"+payload+"\x60\x60\x60"}}
-        review={"user":{"login":"qa-reviewer"},"commit_id":head,"state":"APPROVED",
-                "body":"\x60\x60\x60yaml\nkind: QA_RESULT\n"
-                       "author: qa-reviewer\ntask_id: POLICY01\ntested_sha: "+head+
-                       "\nverdict: PASS\n\x60\x60\x60"}
-        with self.assertRaisesRegex(ValueError,"second independent"):
-            evaluate(event,[review],["packages/fpf_policy/pr_gate.py"],set())
-        with self.assertRaisesRegex(ValueError,"No distinct"):
-            evaluate(event,[],["packages/fpf_policy/pr_gate.py"],set())
+        # G2 requires a resolvable station registry on the base commit, so this
+        # test needs a real repository rather than synthetic SHAs.
+        import os
+        import subprocess
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "t@e.invalid"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+            subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=root, check=True)
+            (root / ".fpf").mkdir()
+            (root / ".fpf" / "stations.yaml").write_text(
+                "version: 1\n"
+                "stations:\n"
+                "  - id: ST-QA\n"
+                "    kind: qa-evidence\n"
+                "    carriers:\n"
+                "      - {type: github-login, value: qa-reviewer}\n",
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("x\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=root, check=True)
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                                  capture_output=True, text=True, check=True).stdout.strip()
+            base = head
+            payload="kind: POLICY_CHANGE\ntask_id: POLICY01\nrisk_acknowledged: true\n" + (
+                "tested_code_sha: "+head+"\nbaseline_sha: "+base+
+                "\nchanged_files:\n  - packages/fpf_policy/pr_gate.py\n")
+            event={"pull_request":{"head":{"sha":head,"ref":"fix/policy"},
+                   "base":{"sha":base},"user":{"login":"dev-author"},
+                   "body":"\x60\x60\x60yaml\n"+payload+"\x60\x60\x60"}}
+            review={"user":{"login":"qa-reviewer"},"commit_id":head,"state":"APPROVED",
+                    "body":"\x60\x60\x60yaml\nkind: QA_RESULT\n"
+                           "author: qa-reviewer\ntask_id: POLICY01\ntested_sha: "+head+
+                           "\nverdict: PASS\n\x60\x60\x60"}
+            with patch.dict(os.environ, {"FPF_CANDIDATE_REPO": str(root),
+                                         "GITHUB_REPOSITORY": "org/repo"}):
+                with self.assertRaisesRegex(ValueError,"second independent"):
+                    evaluate(event,[review],["packages/fpf_policy/pr_gate.py"],set())
+                with self.assertRaisesRegex(ValueError,"No distinct"):
+                    evaluate(event,[],["packages/fpf_policy/pr_gate.py"],set())
 
     def test_bootstrap_schema_resolves_in_vendor_and_missing_fails(self):
         d={"sha":"a"*40,"base_ref":"main","tracked_files":0,"modules":[],"documents":[]}
