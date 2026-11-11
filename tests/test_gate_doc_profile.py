@@ -40,6 +40,23 @@ def _init_repo(tmp_path: Path) -> Path:
     return repo
 
 
+def _card(tested_sha: str, base_sha: str, profile: str) -> dict:
+    return {
+        "result_version": 1,
+        "kind": "QA_RESULT",
+        "task_id": "FPF2-TEST-01",
+        "tested_sha": tested_sha,
+        "runner_sha": base_sha,
+        "qa_contract_sha": base_sha,
+        "environment": "unit",
+        "author": "qa-bot[bot]",
+        "verdict": "PASS",
+        "profile": profile,
+        "checks": [{"name": "EVID-01", "exit_code": 0}],
+        "evidence_manifest_sha256": "a" * 64,
+    }
+
+
 def test_direct_standard_edit_is_promoted_to_gate_pr():
     assert pr_gate.promote_doc_route("POLICY_PR", [STANDARD]) == "GATE_PR"
 
@@ -141,3 +158,34 @@ def test_qa_result_binding_rejects_generic_profile_for_standard_slice(tmp_path):
         card("DOC"), dev_data=dev, repo_path=repo
     )
     assert not any("DOC profile binding violated" in e for e in doc_errors)
+
+def test_binding_covers_non_markdown_extension(tmp_path):
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    extra = repo / "docs" / "standards" / "FPF-STANDARD-2.0.markdown"
+    extra.write_text("# standard\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "add markdown-suffixed standard")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    errors = coordinator.validate_qa_result(
+        _card(head, base, "Library"),
+        dev_data={"task_id": "FPF2-TEST-01", "author": "dev-user",
+                  "baseline_sha": base, "tested_code_sha": head},
+        repo_path=repo,
+    )
+    assert any("DOC profile binding violated" in e for e in errors)
+
+
+def test_binding_fails_closed_when_change_set_is_unreadable(tmp_path):
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    missing = "0" * 40
+
+    errors = coordinator.validate_qa_result(
+        _card(base, base, "Library"),
+        dev_data={"task_id": "FPF2-TEST-01", "author": "dev-user",
+                  "baseline_sha": missing, "tested_code_sha": base},
+        repo_path=repo,
+    )
+    assert any("cannot be evaluated" in e for e in errors)

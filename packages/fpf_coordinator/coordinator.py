@@ -422,9 +422,10 @@ def validate_qa_result(
                     if len(parts) < 2:
                         continue
                     changed.extend(p.strip() for p in parts[1:] if p.strip())
+                # Same contract as pr_gate.is_normative_standard: the governed
+                # directory is the rule, extension is irrelevant.
                 touches_standard = any(
-                    path.startswith("docs/standards/") and path.endswith(".md")
-                    for path in changed
+                    path.startswith("docs/standards/") for path in changed
                 )
                 if touches_standard:
                     declared = str(qa_data.get("profile", "") or "").strip()
@@ -434,9 +435,15 @@ def validate_qa_result(
                         declared_profile = ""
                     if declared_profile != "DOC":
                         errors.append(
-                            "DOC profile binding violated: slice touches docs/standards/*.md "
+                            "DOC profile binding violated: slice touches docs/standards/ "
                             f"but QA_RESULT profile is '{declared}' (must be 'DOC')"
                         )
+            else:
+                # Never let an unreadable change set silently skip the binding.
+                errors.append(
+                    "DOC profile binding cannot be evaluated: git diff failed for "
+                    f"{base_sha}...{tested_sha} (fail closed)"
+                )
 
     findings = qa_data.get("findings", {})
     if isinstance(findings, dict):
