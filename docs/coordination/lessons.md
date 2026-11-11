@@ -66,3 +66,24 @@
 - **经过**：QA 总指挥结构性否决 Library profile 后，负责人代理裁定采纳"方案 B（一次性例外）"。在例外被行使之前，DOC profile 先落地并合并，独立 QA 得以真实执行 `EVID-33/34`；第六轮裁决给出 `verdict: PASS`，并明确 `exception_status: 作废`。
 - **治理红线**：例外一旦签发就进入台账，无论是否被使用；作废必须由原裁决方书面确认，并记录"提出 → 否决 → 替代方案落地 → 作废"的完整链路。例外不得被后续切片引用。
 - **复犯计数**：1 / 3
+
+### `[LESSON-010]` GitHub 原生 required review 不统计 App 安装身份的批准
+- **触发源**：G2 收口分支保护探针（2026-11-12，PR #86）
+- **缺陷现象**：`fpf-reviewer-huangzuomin[bot]` 对 head 提交了 `APPROVED`（review 在时间线可见、`validate-card` 认可），但把分支保护改成 `required_approving_review_count=1` 后 `mergeStateStatus` 变为 `BLOCKED`、`reviewDecision=REVIEW_REQUIRED`。
+- **根因**：`GET /repos/{owner}/{repo}/collaborators/fpf-reviewer-huangzuomin[bot]/permission` 返回 `{"permission":"none"}`，review 的 `authorAssociation=NONE`。GitHub 原生 required review 只统计**具备仓库写权限**身份的批准；App 安装权限（`pull_requests: write`）不等于仓库角色。
+- **治理红线**：任何"平台层强制批准"的设计，必须先实测批准主体在仓库权限模型中的角色；不得由 `validate-card` 通过就推断分支保护也会通过。收紧不可达时必须立即回滚，禁止留下不可合并状态。
+- **复犯计数**：1 / 3
+
+### `[LESSON-011]` 同名 check run 新旧并存时 rollup 仍为 FAILURE，须重跑旧 run
+- **触发源**：G2 收口探针（2026-11-12，PR #86）
+- **缺陷现象**：同一 head `84a5c0b9` 上，`validate-card` 先 failure（Run `43059903481`）、后由 `pull_request_review` 事件产生 success（Run `43060211875`），但 `commits.statusCheckRollup.state` 仍为 `FAILURE`、`mergeStateStatus=BLOCKED`。
+- **关键细节**：`gh run rerun <old-id> --failed` 会重放**旧事件载荷**，但门禁判定是**实时查 GitHub API**（review、artifact），因此旧 run 重跑后读到已存在的批准而转绿；rollup 随之清空失败项。这一点修正了 `LESSON-007` 中"body 变过则重跑必失败"的绝对化表述——是否转绿取决于门禁读的是事件快照还是实时状态。
+- **治理红线**：合并前必须同时检查"最新一次 required check"与 `statusCheckRollup.state`；存在历史失败项时优先重跑旧 run，其次触发新事件，最后才考虑改门禁代码（默认禁止）。
+- **复犯计数**：1 / 3
+
+### `[LESSON-012]` 协议只有"载体"不够，还必须能被门禁解析，否则机制不成立
+- **触发源**：协同机制诊断 + G2 落地（2026-11-12）
+- **缺陷现象**：工位协议早期只存在于 `.fpf-runtime/coordination/`（`.gitignore` 忽略、`git ls-files` 计数 0），新线程读不到，协同退化为执行者自觉；PR #83 入文档后仍不产生强制力，因为门禁无法把"ChatGPT 会话 ID"或"Codex 线程 ID"解析成工位。
+- **根因**：强制力 = 载体（可跟踪文件）+ 解析器（门禁可判定）+ 负向测试。三者缺一，机制都只停留在声明。
+- **治理红线**：声称"某协同机制已生效"前，必须能指出①载体路径 ②门禁解析代码位置 ③至少一条负向用例。缺任一项只能表述为"规范意图"或 `PLAN_ONLY`。
+- **复犯计数**：1 / 3
