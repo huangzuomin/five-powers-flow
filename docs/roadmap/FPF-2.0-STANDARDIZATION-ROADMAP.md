@@ -141,7 +141,7 @@ FPF 不计划成为：
 “工单 → DEV → 固定 SHA → 独立 QA → `validate-card` → 合并 → 部署 → 地图记账”这条链路已有真实成功记录：
 
 - **任意外部项目实证：** `huangzuomin/geo-service-core` Actions Run `42796435020`，`FPF Independent QA (reviewer-dispatched)`，`Full-Stack` profile，head `fc3e47c3f75ec649ed3b150e0d59ba94e1a15935`，2026-11-10 执行，结论 `success`。
-- **本仓库实证：** PR #70–#76 每个切片均有对应 Actions Run（`41205180878`、`41218539037`、`41219858672`、`41221914610`、`41223289293`、`41225694824`）与 `fpf-qa-bot-huangzuomin[bot]` 的 APPROVED Review，合并 SHA 记录于 `docs/coordination/project-map.md`。
+- **本仓库实证：** PR #70–#75 每个代码切片均有对应 Actions Run（`41205180878`、`41218539037`、`41219858672`、`41221914610`、`41223289293`、`41225694824`）与 `fpf-qa-bot-huangzuomin` 的 APPROVED Review；PR #69（架构文档）与 PR #76（地图记账）也有独立 Review，但走 `validate-card` 的文档/地图路径，没有代码切片 QA Run。合并 SHA 记录于 `docs/coordination/project-map.md`。
 
 但这不等于“宪制强制力已落地”：
 
@@ -1014,7 +1014,7 @@ G2 宪制强制力 → G3 凭据与身份边界 → G4 状态机归约 → H1 �
 
 - **落点阶段：** 阶段 2；状态 `PLAN_ONLY`。
 - **问题定义：** 仓库可以做到零跟踪密钥，但开发机上仍可能存在未加密、未忽略、权限过宽的私钥；bot token、签发私钥与 DEV 环境共享同一文件系统，所谓“独立 QA 身份”没有物理边界。
-- **反例证据：** 本机 `D:\SSOT\Work\FPF自动化开发工作流\.inflow-setup\issuer_private_key.hex`，64 字节 Ed25519 种子，未加密、未跟踪；2026-11-11 开工时受版本控制的 `.gitignore` 未覆盖 `.inflow-setup/`。同目录还有 `collector_token.txt`（55 字节）。本 PR 的 Phase 0 提交已补 `.gitignore`（`.inflow-setup/`、`secrets/`、`*.hex`），但**密钥未轮换，按已暴露处理**。
+- **反例证据：** 本机 `D:\SSOT\Work\FPF自动化开发工作流\.inflow-setup\issuer_private_key.hex`，64 个十六进制字符（32 字节 Ed25519 种子）的私钥文件，未加密、未跟踪；2026-11-11 开工时受版本控制的 `.gitignore` 未覆盖 `.inflow-setup/`。同目录还有 `collector_token.txt`（55 字节）。本 PR 的 Phase 0 提交已补 `.gitignore`（`.inflow-setup/`、`secrets/`、`*.hex`），但**密钥未轮换，按已暴露处理**。
 - **目标行为：** 仓库零密钥；merge/governance/QA bot token 只进 CI secrets 或 OS 凭据库；pre-commit 与 CI 双密钥扫描；签发私钥不落盘到工作区；轮换与吊销有可核验记录。
 - **验收标准（可测）：**
   1. `git ls-files` 与 `git grep` 对私钥模式零命中；
