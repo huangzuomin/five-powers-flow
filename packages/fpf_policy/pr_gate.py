@@ -26,6 +26,18 @@ BOOT_FILES = frozenset({
 MAP_FILES = frozenset({"project-map.md", "lessons.md",
                        "docs/coordination/project-map.md",
                        "docs/coordination/lessons.md"})
+# Governed location of normative standard text. The location *is* the contract:
+# a change that touches this tree (including by rename or deletion) must be
+# adjudicated through the independent-QA route, never an identity-only one.
+NORMATIVE_STANDARD_PREFIX = "docs/standards/"
+
+
+def is_normative_standard(path: str) -> bool:
+    try:
+        normalized = normalize_repo_path(path)
+    except ValueError:
+        return False
+    return normalized.startswith(NORMATIVE_STANDARD_PREFIX) and normalized.endswith(".md")
 
 def _policy_scope(changed: set[str]) -> str:
     """Governing workflow changes require the GATE_PR route, never prose waiver."""
@@ -173,8 +185,53 @@ def git_cmd(*args: str) -> str:
     return p.stdout.strip()
 
 
+def touched_paths(base: str, sha: str, repo_dir: str | None = None) -> set[str]:
+    """Every path a change set touches, including rename sources and deletions.
+
+    ``git diff --name-only`` reports only the destination of a rename and drops
+    deleted paths entirely, so a file moved out of the governed tree would look
+    like an unrelated addition. ``--name-status -M`` keeps the source path.
+    """
+    if repo_dir is None:
+        raw = git_cmd("diff", "--name-status", "-M", f"{base}...{sha}")
+    else:
+        result = subprocess.run(
+            ["git", "diff", "--name-status", "-M", f"{base}...{sha}"],
+            cwd=repo_dir, capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode:
+            raise ValueError("Git verification error: " + result.stderr[-400:])
+        raw = result.stdout.strip()
+    paths: set[str] = set()
+    for line in raw.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        for candidate in parts[1:]:
+            candidate = candidate.strip()
+            if candidate:
+                paths.add(candidate)
+    return paths
+
+
+def promote_doc_route(pr_type: str, files, extra_paths=None) -> str:
+    """Identity-only routing is not available for normative standard changes.
+
+    A normative standard document may not be adjudicated on the identity-only
+    route. Promotion happens on the touched set, so renaming a standard out of
+    the governed tree does not launder it into an unrelated prose change.
+    """
+    if pr_type != "POLICY_PR":
+        return pr_type
+    touched = {normalize_repo_path(p) for p in files}
+    touched |= {normalize_repo_path(p) for p in (extra_paths or set())}
+    if any(is_normative_standard(p) for p in touched):
+        return "GATE_PR"
+    return pr_type
+
+
 def evaluate(event: dict, reviews: list[dict], files: list[str],
-             baseline_files: set[str]) -> str:
+             baseline_files: set[str], extra_paths: set[str] | None = None) -> str:
     pr = event.get("pull_request") or {}
     sha = str((pr.get("head") or {}).get("sha") or "").lower()
     base = str((pr.get("base") or {}).get("sha") or "").lower()
@@ -193,6 +250,7 @@ def evaluate(event: dict, reviews: list[dict], files: list[str],
     kind = cards[0]
     card = yaml_card(body,kind)
     pr_type = classify(files,kind,baseline_files,branch)
+    pr_type = promote_doc_route(pr_type, files, extra_paths)
     if pr_type in ("CODE_PR", "GATE_PR"):
         reviewer, qa = verified_reviewer(reviews, author, sha)
     else:
@@ -284,10 +342,11 @@ def main() -> int:
         sha = pr["head"]["sha"]
         base = pr["base"]["sha"]
         files = git_cmd("diff","--name-only",base+"..."+sha).splitlines()
+        extra_paths = touched_paths(base, sha) - set(files)
         tracked = set(git_cmd("ls-tree","-r","--name-only",base).splitlines())
         repo_slug = os.environ["GITHUB_REPOSITORY"]
         reviews = gh_reviews(repo_slug,int(pr["number"]),os.environ.get("GH_TOKEN",""))
-        print(evaluate(event,reviews,files,tracked))
+        print(evaluate(event,reviews,files,tracked,extra_paths=extra_paths))
         return 0
     except Exception as exc:
         print("::error::[FPF FAIL CLOSED] " + str(exc),file=sys.stderr)

@@ -412,11 +412,16 @@ def validate_qa_result(
         base_sha = str(dev_data.get("baseline_sha") or "").strip()
         if HEX_SHA_RE.fullmatch(base_sha):
             code, changed_out, _ = run_cmd(
-                ["git", "diff", "--name-only", f"{base_sha}...{tested_sha}"],
+                ["git", "diff", "--name-status", "-M", f"{base_sha}...{tested_sha}"],
                 cwd=repo_path,
             )
             if code == 0:
-                changed = [line.strip() for line in changed_out.splitlines() if line.strip()]
+                changed = []
+                for line in changed_out.splitlines():
+                    parts = line.split("\t")
+                    if len(parts) < 2:
+                        continue
+                    changed.extend(p.strip() for p in parts[1:] if p.strip())
                 touches_standard = any(
                     path.startswith("docs/standards/") and path.endswith(".md")
                     for path in changed
