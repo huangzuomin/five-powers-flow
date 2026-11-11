@@ -9,10 +9,12 @@
 |---|---|---|---|
 | 平台原生 | GitHub secret scanning + push protection | 不可绕过，但只认厂商格式 | `enabled`（仓库设置实测） |
 | CI | `.github/workflows/secret-scan.yml` | 可绕过（需改 workflow），但每次 PR 必跑 | 本切片新增 |
-| 本地 | `.githooks/pre-commit` → `tools/security/scan_secrets.py --staged` | 可 `--no-verify` 绕过 | 本切片新增 |
+| 本地 | 生成的 `.githooks/pre-commit` → `packages/fpf_gates/secret_scan.py --staged` | 可 `--no-verify` 绕过 | 本切片新增 |
 
-扫描器是**确定性的、离线的**：不联网、不读取指定路径以外的材料、输出只含
-命中位置与规则名，不回显密钥全文（截断至 120 字符）。
+扫描器（`packages/fpf_gates/secret_scan.py`）是**确定性的、离线的**：不联网、
+不读取指定路径以外的材料、输出只含命中位置与规则名，不回显密钥全文（截断至 120 字符）。
+钩子正文由 `packages/fpf_gates/install_hooks.py` 在安装时写出，仓库里不单独跟踪
+`.githooks/pre-commit`——原因见第七节。
 
 ### 规则集
 
@@ -88,7 +90,28 @@
 2. **运行时短时令牌**属阶段 3 的 Credential Broker 设计，不在 G3 范围（roadmap
    §8.7.3 边界："G3 先解决静态密钥不落盘，Broker 解决运行时短时令牌"）。
 3. **pre-commit 钩子默认未安装**：需要在本机执行
-   `python tools/security/install_hooks.py`。该工具会先列出将被 `core.hooksPath`
+   `python packages/fpf_gates/install_hooks.py`。该工具会先写出
+   `.githooks/pre-commit`，列出将被 `core.hooksPath`
    遮蔽的 `.git/hooks` 条目，不静默搬移或删除。
 4. **CI 中的 `secret-scan` 尚未被加为 required check**：需在分支保护里加入
    `secret-scan`，本切片不自动修改仓库设置。
+5. **扫描范围以 `git ls-files` / 暂存区为准**：未 `git add` 且未跟踪的文件不在
+   任何一层范围内。本次实跑已踩到该边界——本地在 `git add` 之前验证，扫描器漏掉了
+   自己的规则定义行，由 CI 的 `secret-scan` 抓到（LESSON-013）。先 add、再验证。
+
+## 七、为什么扫描器放在 `packages/fpf_gates/`
+
+门禁的 `POLICY_CHANGE` 路由（`pr_gate._policy_scope`）只接受三类路径：
+受保护前缀（`.github/`、`.fpf/`、`schemas/`、`packages/` 等）、`docs/`、`tests/`、
+`templates/`，以及少数仓库根文件。`tools/` 与 `.githooks/` **不在**这三类里。
+
+后果是实测到的路由死锁：
+
+- 含 `.github/workflows/` 的 PR → `POLICY_CHANGE` → `GATE_PR`，但同一 PR 里出现
+  `tools/security/...` 会报 `POLICY_CHANGE contains unrelated application files`；
+- 改用 `DEV_HANDOFF` → `CODE_PR`，又会因 `.github/` 属受保护路径报
+  `CODE_PR modifies protected governance paths`。
+
+把扫描器与安装器放进受保护的 `packages/fpf_gates/`，钩子正文改为安装时生成，
+整个切片就落在同一类路径上，可一单走 `GATE_PR`。这是路由约束导致的落点选择，
+不是包归属判断。

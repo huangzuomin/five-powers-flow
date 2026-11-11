@@ -44,7 +44,7 @@ class Rule:
 RULES: tuple[Rule, ...] = (
     Rule(
         "PEM-PRIVATE-KEY",
-        re.compile(r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----"),
+        re.compile(r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----"),  # fpf-secret-scan: allow rule definition
         "PEM private key block",
     ),
     Rule(
@@ -69,7 +69,7 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         "OPENSSH-PRIVATE-KEY",
-        re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----"),
+        re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----"),  # fpf-secret-scan: allow rule definition
         "OpenSSH private key",
     ),
 )
