@@ -1,0 +1,104 @@
+{
+  "standard_id": "FPF-STANDARD-2.0",
+  "version": "2.0.0",
+  "status": "DRAFT",
+  "date": "2026-11-11",
+  "task_id": "FPF2-STD-SPEC-01",
+  "base_sha": "28ebbd5e12da0a0e9a266d736986898fc5731024",
+  "supersedes/derives_from": "FPF-RFC-001 v1.2.1",
+  "normative_source": "docs/roadmap/FPF-2.0-STANDARDIZATION-ROADMAP.md",
+  "expected_sections": [
+    "## 0. 文档元数据",
+    "## 1. 范围（Scope）与非目标（Non-goals）",
+    "## 2. 术语与规范性引用",
+    "## 3. 治理不变项",
+    "## 4. 六平面架构",
+    "## 5. 核心数据契约与事件模型",
+    "## 6. 证据与保证",
+    "## 7. 三产品与六维兼容",
+    "## 8. 稳定版验收标准",
+    "## 9. 一致性要求总表",
+    "## 10. 版本与变更控制",
+    "## 11. 未实施声明"
+  ],
+  "clause_counts": {
+    "GOV": 8,
+    "PLN": 24,
+    "CTR": 13,
+    "EVT": 10,
+    "EVD": 13,
+    "PRD": 5,
+    "CMP": 8,
+    "ACC": 13
+  },
+  "six_planes": [
+    {
+      "name": "Protocol & Conformance Foundation",
+      "roadmap_section": "§3.1"
+    },
+    {
+      "name": "Governance Plane",
+      "roadmap_section": "§3.2"
+    },
+    {
+      "name": "Control Plane",
+      "roadmap_section": "§3.3"
+    },
+    {
+      "name": "Execution Plane",
+      "roadmap_section": "§3.4"
+    },
+    {
+      "name": "Evidence & Assurance Plane",
+      "roadmap_section": "§3.5"
+    },
+    {
+      "name": "Integration Plane",
+      "roadmap_section": "§3.6"
+    }
+  ],
+  "acc07_required_phrases": [
+    "立即中断",
+    "正式状态与人工裁决",
+    "独立环境重试预算",
+    "绑定失败制品",
+    "纠偏后的"
+  ],
+  "acc08_dimensions": [
+    "Provenance",
+    "Reproducibility",
+    "Isolation",
+    "Independence",
+    "Coverage"
+  ],
+  "acc_source_items": {
+    "ACC-01": "§10 第 1 条",
+    "ACC-02": "§10 第 2 条",
+    "ACC-03": "§10 第 3 条",
+    "ACC-04": "§10 第 4 条",
+    "ACC-05": "§10 第 5 条",
+    "ACC-06": "§10 第 6 条",
+    "ACC-07": "§10 第 7 条",
+    "ACC-08": "§10 第 8 条",
+    "ACC-09": "§10 第 9 条",
+    "ACC-10": "§10 第 10 条",
+    "ACC-11": "§10 第 11 条",
+    "ACC-12": "§10 第 12 条",
+    "ACC-13": "§10 第 13 条"
+  },
+  "forbidden_phrases": [
+    "已实现",
+    "已上线",
+    "已支持"
+  ],
+  "required_levels": [
+    "MUST",
+    "SHOULD",
+    "MAY"
+  ],
+  "required_boundaries": [
+    "PLAN_ONLY",
+    "NOT_AUTHORIZED"
+  ],
+  "roadmap_section10_items": 13
+}
