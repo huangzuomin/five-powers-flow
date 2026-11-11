@@ -43,7 +43,7 @@ REQUIRED_PROFILE_EVIDENCES: Dict[str, List[str]] = {
     name: [f"EVID-{number:02d}" for number in sorted(numbers)]
     for name, numbers in {
         "Library": _LIB, "API-DB": _API, "Full-Stack": _FULL,
-        "Rework": _REWORK,
+        "Rework": _REWORK, "DOC": _LIB | {33, 34},
     }.items()
 }
 PROFILE_ALIASES = {

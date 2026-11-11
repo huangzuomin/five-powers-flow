@@ -76,6 +76,17 @@
       "python",
       "-c",
       "import pathlib; assert pathlib.Path('docs/AUDIT-ROUND6.md').is_file(), 'Missing risk register docs/AUDIT-ROUND6.md'; print('KNOWN_RISKS registered in docs/AUDIT-ROUND6.md')"
+    ],
+    "EVID-33": [
+      "python",
+      "tools/standards/verify_standard.py"
+    ],
+    "EVID-34": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/standards/test_standard_2_0.py"
     ]
   },
   "expected_exit_codes": {
