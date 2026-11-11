@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from packages.fpf_policy.protected import normalize_repo_path
+
 HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 HEX_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -43,7 +45,7 @@ REQUIRED_PROFILE_EVIDENCES: Dict[str, List[str]] = {
     name: [f"EVID-{number:02d}" for number in sorted(numbers)]
     for name, numbers in {
         "Library": _LIB, "API-DB": _API, "Full-Stack": _FULL,
-        "Rework": _REWORK,
+        "Rework": _REWORK, "DOC": _LIB | {33, 34},
     }.items()
 }
 PROFILE_ALIASES = {
@@ -403,6 +405,73 @@ def validate_qa_result(
                 errors.append(f"QA check item '{chk_name}' missing exit_code field")
             elif code != 0 and verdict == "PASS":
                 errors.append(f"CRITICAL REJECTION: QA check '{chk_name}' failed with exit_code {code}. Verdict cannot be PASS!")
+
+    # DOC profile binding: the profile is not a free choice by the dispatcher.
+    # A slice that touches a normative standard document must be adjudicated
+    # under the DOC profile, otherwise a generic profile can silently skip the
+    # document assertions and still produce a PASS artifact.
+    # A PASS is only meaningful when the change set can actually be computed.
+    # Missing repository context or an unusable baseline must reject, never skip.
+    if dev_data and verdict == "PASS" and HEX_SHA_RE.fullmatch(tested_sha):
+        base_sha = str(dev_data.get("baseline_sha") or "").strip()
+        if repo_path is None:
+            errors.append(
+                "DOC profile binding cannot be evaluated: PASS requires a repository "
+                "path to compute the change set (fail closed)"
+            )
+        elif not HEX_SHA_RE.fullmatch(base_sha):
+            errors.append(
+                "DOC profile binding cannot be evaluated: DEV_HANDOFF baseline_sha "
+                f"is not a commit SHA ({base_sha!r}) (fail closed)"
+            )
+        else:
+            code, changed_out, _ = run_cmd(
+                ["git", "diff", "--name-status", "-M", f"{base_sha}...{tested_sha}"],
+                cwd=repo_path,
+            )
+            if code == 0:
+                changed = []
+                for line in changed_out.splitlines():
+                    parts = line.split("\t")
+                    if len(parts) < 2:
+                        continue
+                    changed.extend(p.strip() for p in parts[1:] if p.strip())
+                # Same contract as pr_gate.is_normative_standard: the governed
+                # directory is the rule, extension is irrelevant, and paths are
+                # normalized exactly the way the router normalizes them so that a
+                # case or separator variant cannot be promoted by one side only.
+                unparseable: List[str] = []
+                normalized: List[str] = []
+                for path in changed:
+                    try:
+                        normalized.append(normalize_repo_path(path))
+                    except ValueError:
+                        unparseable.append(path)
+                if unparseable:
+                    errors.append(
+                        "DOC profile binding cannot be evaluated: change set contains "
+                        f"paths outside the repository ({unparseable}) (fail closed)"
+                    )
+                touches_standard = any(
+                    path.startswith("docs/standards/") for path in normalized
+                )
+                if touches_standard:
+                    declared = str(qa_data.get("profile", "") or "").strip()
+                    try:
+                        declared_profile = normalize_profile(declared)
+                    except ValueError:
+                        declared_profile = ""
+                    if declared_profile != "DOC":
+                        errors.append(
+                            "DOC profile binding violated: slice touches docs/standards/ "
+                            f"but QA_RESULT profile is '{declared}' (must be 'DOC')"
+                        )
+            else:
+                # Never let an unreadable change set silently skip the binding.
+                errors.append(
+                    "DOC profile binding cannot be evaluated: git diff failed for "
+                    f"{base_sha}...{tested_sha} (fail closed)"
+                )
 
     findings = qa_data.get("findings", {})
     if isinstance(findings, dict):
