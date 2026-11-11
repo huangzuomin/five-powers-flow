@@ -189,3 +189,52 @@ def test_binding_fails_closed_when_change_set_is_unreadable(tmp_path):
         repo_path=repo,
     )
     assert any("cannot be evaluated" in e for e in errors)
+
+
+def test_binding_uses_the_same_path_normalization_as_the_router(tmp_path, monkeypatch):
+    """A case variant must not be promoted by one side and skipped by the other.
+
+    The case variant is injected through the diff output rather than the
+    filesystem: Windows and macOS checkouts are case-insensitive and cannot
+    materialize both spellings, but git can still record either one.
+    """
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    head = base
+    real_run_cmd = coordinator.run_cmd
+
+    def fake_run_cmd(cmd, cwd=None, timeout=15):
+        if len(cmd) > 1 and cmd[0] == "git" and cmd[1] == "diff":
+            return 0, "M\tdocs/Standards/FPF-STANDARD-2.0.md\n", ""
+        return real_run_cmd(cmd, cwd=cwd, timeout=timeout)
+
+    monkeypatch.setattr(coordinator, "run_cmd", fake_run_cmd)
+
+    base_route = pr_gate.classify(["docs/Standards/FPF-STANDARD-2.0.md"],
+                                  "POLICY_CHANGE", set(), "")
+    routed = pr_gate.promote_doc_route(base_route,
+                                       ["docs/Standards/FPF-STANDARD-2.0.md"])
+    assert routed == "GATE_PR"
+
+    errors = coordinator.validate_qa_result(
+        _card(head, base, "Library"),
+        dev_data={"task_id": "FPF2-TEST-01", "author": "dev-user",
+                  "baseline_sha": base, "tested_code_sha": head},
+        repo_path=repo,
+    )
+    assert any("DOC profile binding violated" in e for e in errors)
+
+
+def test_pass_without_repository_path_is_rejected(tmp_path):
+    """No repository context means the change set cannot be computed: reject, never skip."""
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    errors = coordinator.validate_qa_result(
+        _card(head, base, "Library"),
+        dev_data={"task_id": "FPF2-TEST-01", "author": "dev-user",
+                  "baseline_sha": base, "tested_code_sha": head},
+        repo_path=None,
+    )
+    assert any("requires a repository path" in e for e in errors)

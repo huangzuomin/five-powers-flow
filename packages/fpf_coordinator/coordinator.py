@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from packages.fpf_policy.protected import normalize_repo_path
+
 HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 HEX_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -408,9 +410,21 @@ def validate_qa_result(
     # A slice that touches a normative standard document must be adjudicated
     # under the DOC profile, otherwise a generic profile can silently skip the
     # document assertions and still produce a PASS artifact.
-    if dev_data and repo_path and HEX_SHA_RE.fullmatch(tested_sha):
+    # A PASS is only meaningful when the change set can actually be computed.
+    # Missing repository context or an unusable baseline must reject, never skip.
+    if dev_data and verdict == "PASS" and HEX_SHA_RE.fullmatch(tested_sha):
         base_sha = str(dev_data.get("baseline_sha") or "").strip()
-        if HEX_SHA_RE.fullmatch(base_sha):
+        if repo_path is None:
+            errors.append(
+                "DOC profile binding cannot be evaluated: PASS requires a repository "
+                "path to compute the change set (fail closed)"
+            )
+        elif not HEX_SHA_RE.fullmatch(base_sha):
+            errors.append(
+                "DOC profile binding cannot be evaluated: DEV_HANDOFF baseline_sha "
+                f"is not a commit SHA ({base_sha!r}) (fail closed)"
+            )
+        else:
             code, changed_out, _ = run_cmd(
                 ["git", "diff", "--name-status", "-M", f"{base_sha}...{tested_sha}"],
                 cwd=repo_path,
@@ -423,9 +437,23 @@ def validate_qa_result(
                         continue
                     changed.extend(p.strip() for p in parts[1:] if p.strip())
                 # Same contract as pr_gate.is_normative_standard: the governed
-                # directory is the rule, extension is irrelevant.
+                # directory is the rule, extension is irrelevant, and paths are
+                # normalized exactly the way the router normalizes them so that a
+                # case or separator variant cannot be promoted by one side only.
+                unparseable: List[str] = []
+                normalized: List[str] = []
+                for path in changed:
+                    try:
+                        normalized.append(normalize_repo_path(path))
+                    except ValueError:
+                        unparseable.append(path)
+                if unparseable:
+                    errors.append(
+                        "DOC profile binding cannot be evaluated: change set contains "
+                        f"paths outside the repository ({unparseable}) (fail closed)"
+                    )
                 touches_standard = any(
-                    path.startswith("docs/standards/") for path in changed
+                    path.startswith("docs/standards/") for path in normalized
                 )
                 if touches_standard:
                     declared = str(qa_data.get("profile", "") or "").strip()
