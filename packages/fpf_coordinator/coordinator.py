@@ -404,6 +404,35 @@ def validate_qa_result(
             elif code != 0 and verdict == "PASS":
                 errors.append(f"CRITICAL REJECTION: QA check '{chk_name}' failed with exit_code {code}. Verdict cannot be PASS!")
 
+    # DOC profile binding: the profile is not a free choice by the dispatcher.
+    # A slice that touches a normative standard document must be adjudicated
+    # under the DOC profile, otherwise a generic profile can silently skip the
+    # document assertions and still produce a PASS artifact.
+    if dev_data and repo_path and HEX_SHA_RE.fullmatch(tested_sha):
+        base_sha = str(dev_data.get("baseline_sha") or "").strip()
+        if HEX_SHA_RE.fullmatch(base_sha):
+            code, changed_out, _ = run_cmd(
+                ["git", "diff", "--name-only", f"{base_sha}...{tested_sha}"],
+                cwd=repo_path,
+            )
+            if code == 0:
+                changed = [line.strip() for line in changed_out.splitlines() if line.strip()]
+                touches_standard = any(
+                    path.startswith("docs/standards/") and path.endswith(".md")
+                    for path in changed
+                )
+                if touches_standard:
+                    declared = str(qa_data.get("profile", "") or "").strip()
+                    try:
+                        declared_profile = normalize_profile(declared)
+                    except ValueError:
+                        declared_profile = ""
+                    if declared_profile != "DOC":
+                        errors.append(
+                            "DOC profile binding violated: slice touches docs/standards/*.md "
+                            f"but QA_RESULT profile is '{declared}' (must be 'DOC')"
+                        )
+
     findings = qa_data.get("findings", {})
     if isinstance(findings, dict):
         p0_findings = findings.get("p0", [])
