@@ -1,10 +1,11 @@
 # FPF 2.0 标准化能力建设与迭代路线图
 
-> **文档版本：** v0.1（架构规划提案）  
+> **文档版本：** v0.2（架构规划提案；2026-11-11 基线刷新与复盘归并）  
 > **编制日期：** 2026-10-31  
-> **基线：** main @ d2852c9315f76010a1dcb752229cec54d397eeed  
-> **关联工作令：** [Issue #66](https://github.com/huangzuomin/five-powers-flow/issues/66)  
-> **文档性质：** 架构规划，不替代现行 FPF-RFC-001，不构成任何代码、合并、发布或部署授权。
+> **最近修订：** 2026-11-11  
+> **基线：** main @ 9d96b37f10692f1108986055c0f02f161070ec4f  
+> **关联工作令：** [Issue #66](https://github.com/huangzuomin/five-powers-flow/issues/66) · [PR #67](https://github.com/huangzuomin/five-powers-flow/pull/67)  
+> **文档性质：** 架构规划，不替代现行 FPF-RFC-001，不构成任何代码、合并、发布或部署授权。本次修订只新增/刷新规划文本，G2–H4 的实施状态一律为 `PLAN_ONLY`。
 
 ---
 
@@ -87,52 +88,94 @@ FPF 不计划成为：
 
 ---
 
-## 2. 当前基线与能力边界（截至 2026-10-31）
+## 2. 当前基线与能力边界（截至 2026-11-11）
 
-路线图以当前 main 为事实基线。必须区分已合并能力、Draft 实验能力和尚未验证能力，不能将设计、接口或模拟测试表述为真实集成。
+> **基线日期：** 2026-11-11（Asia/Shanghai）  
+> **代码基线：** `main @ 9d96b37f10692f1108986055c0f02f161070ec4f`（本机 `git fetch origin` + `git rev-parse origin/main` 实测）  
+> **证据来源：** 仓库代码与测试、`.github/workflows/`、GitHub Actions Run/Artifact、PR/Review 记录、`docs/coordination/project-map.md`、`docs/reports/FPF-AEC-DELIVERY-REPORT.md`  
+> **状态口径：** `已实现` / `部分实现` / `仅文档` / `NOT_RUN`。没有固定 SHA、真实环境执行或可复核 Artifact 的项，不写作“已实现”。
 
-### 2.1 当前 main 已具备的能力
+### 2.1 口径纠偏：分支保护与“强制力”现状
 
-当前 main 基线为 d2852c9，最近一次合并为 PR #65。
+复盘记录的原始判据是：GitHub 免费版私有仓库无法开启分支保护（`403 Upgrade to GitHub Pro`），`validate-card` 只是建议性 check，`mergeStateStatus=UNSTABLE` 仍可合并，因此宪制强制力依赖自觉。
 
-| 模块 | 当前能力 | 当前定位 |
+2026-11-11 复测结果与该判据**部分不符**，必须如实拆分，不能继续沿用旧结论：
+
+| 判据 | 2026-11-11 实测 | 结论 |
 |---|---|---|
-| FPF-RFC-001 | 五权治理、角色职责、交接卡、证据与生命周期规范 | 规范基线 v1.2.1 |
-| schemas | WORK_ORDER、DEV_HANDOFF、QA_RESULT、证据清单等结构化契约 | 协议数据契约 |
-| fpf_policy | 受保护路径、策略判断、PR 类型与治理边界 | 共享策略层 |
-| fpf_gates | 提测前本地门禁、工作区与路径检查 | 本地强制检查 |
-| fpf_coordinator | 卡片解析、Git SHA、Diff、证据清单和生命周期校验 | 确定性裁决参考实现 |
-| fpf_runtime | Agents SDK 与 Codex CLI 的单切片 DEV/QA 执行、独立 Worktree、有界返工和本地 Ledger | Runtime 0.2 参考实现 |
-| fpf_bootstrap | 项目发现、初始化计划、治理产物、工位创建和 Doctor 检查 | Bootstrap 0.3 参考实现 |
-| GitHub Actions | Schema、边界测试、独立 QA 证据采集和服务端门禁 | GitHub 参考后端 |
+| 仓库可见性与分支保护 | `huangzuomin/five-powers-flow` 当前 `visibility=PUBLIC`；`GET /repos/.../branches/main/protection` 返回 `required_status_checks.contexts=[validate, validate-card]`、`strict=true`、`enforce_admins=true`、`allow_force_pushes=false` | 保护已真实生效；403 属私有阶段的历史约束，不再是当前事实 |
+| 独立 QA 是否平台强制 | `required_approving_review_count=0`；仅 `require_code_owner_reviews=true`，而 `.github/CODEOWNERS` 指向负责人本人 `@huangzuomin` | GitHub 原生 Review 门禁**不强制**任何批准 |
+| `validate-card` 强度 | `packages/fpf_policy/pr_gate.py` 对 `CODE_PR` 要求“不同 GitHub 登录身份、绑定当前 head SHA 的 APPROVED `QA_RESULT` + Artifact 校验”，失败即输出 `::error::[FPF FAIL CLOSED]` | Check 本身是 fail-closed，且在 main 上为 required；但强度完全依赖仓库内策略代码与 workflow 文件 |
+| 策略自保护 | 修改 `packages/fpf_policy/`、`.github/` 或治理文件会走 `POLICY_CHANGE` / `GATE_PR` 路径，最终仍由同一人类账号批准 | 没有平台级第二审批人，也没有密钥级身份分离 |
+| 凭据分权 | 仓库内无密钥被跟踪；但本机存在未加密私钥裸放（见 G3 反例） | 未形成强制边界 |
+
+因此 G2 的问题定义在 2026-11-11 收敛为：**check 有强制力，平台原生审批、身份分离与凭据分权没有强制力**。这不是“保护开不开”的问题，而是“谁有资格批准、凭什么批准、密钥放在哪”的问题。
+
+### 2.2 当前 main 已具备的能力
+
+当前 main 基线为 `9d96b37`，最近一次合并为 PR #76（AEC 地图记账）。本机 2026-11-11 运行 `python -m pytest -q`：**180 passed in 105.00s**。
+
+| 模块 | 当前能力（实测） | 状态 | 证据 |
+|---|---|---|---|
+| FPF-RFC-001 | 五权治理、角色职责、交接卡、证据与生命周期规范 | 已实现（规范） | `docs/SPECIFICATION.md`，v1.2.1 |
+| schemas | WORK_ORDER、DEV_HANDOFF、QA_RESULT、证据清单等结构化契约 | 已实现 | `schemas/`，`validate` workflow |
+| fpf_policy | PR 角色路由、保护路径、独立 QA 证据校验与采集 | 已实现 | `packages/fpf_policy/{pr_gate,protected,qa_artifact,qa_collector}.py` |
+| fpf_gates | 提测前本地门禁、DEV hook 守卫 | 已实现（本地） | `packages/fpf_gates/{pre_handoff,hook_guard_dev}.py` |
+| fpf_coordinator / dispatch | 24 状态机、CAS journal、确定性归约库 | 已实现（库+测试），**未接 GitHub 事件流** | `packages/fpf_coordinator/dispatch/`，`tests/test_coordinator_kernel.py` |
+| fpf_runtime / adapters | ChatGPT Web 与 Codex Worker 适配器契约、Browser Transport 抽象 | 部分实现；真实在线长会话 `NOT_RUN` | `packages/fpf_runtime/adapters/`，`tests/test_provider_adapters.py` |
+| fpf_runtime / security | Credential Broker、环境净化、Windows 隔离抽象 | 部分实现；WFP 内核驱动 `NOT_RUN` | `packages/fpf_runtime/security/`，`tests/test_security_isolation.py` |
+| fpf_runtime / daemon | 调度器、heartbeat、崩溃对账骨架 | 部分实现；长期跨机运行 `NOT_RUN` | `packages/fpf_runtime/daemon/`，`tests/test_daemon_reconciliation.py` |
+| fpf_runtime | 单切片 DEV/QA 执行、独立 worktree、有界返工、本地 Ledger | 部分实现 | `packages/fpf_runtime/runtime.py` |
+| fpf_bootstrap | 项目发现、初始化计划、工位创建、Doctor | 部分实现；main 中 `.fpf/project.yaml` 缺失 | `packages/fpf_bootstrap/`，`docs/BOOTSTRAP.md` |
+| GitHub Actions | `validate`（Schema/规范/边界测试）、`validate-card`（PR fail-closed 门禁）、`fpf-independent-qa`（reviewer-dispatched，采集 Artifact） | 已实现 | `.github/workflows/` |
+| AEC Phase A–G | 架构、内核、适配器、QA 证据链、安全、守护进程、Golden Path 均已合并 | 已实现（代码/文档），真实外部依赖仍 `NOT_RUN` | PR #69–#76，`docs/reports/FPF-AEC-DELIVERY-REPORT.md` |
 
 补充说明：
 
-- Runtime 0.2 使用本地 SQLite Ledger 保存执行过程。该账本是运行时操作记录，不应取代 GitHub 上的授权、PR、Review、Commit 和正式验收事实。
-- 当前证据 Profile 已按任务类型区分，不应将“32项证据规范”理解为每个任务都必须机械执行全部32项。
-- PR #65 已增强对既有治理文件的保留、Bootstrap 韧性和凭据保护。
+- Runtime Ledger 是执行过程记录，不取代 GitHub 上的授权、PR、Review、Commit 和正式验收事实。
+- 证据 Profile 已按任务类型区分，不应把“32 项证据规范”理解为每个任务机械执行全部 32 项。
+- AEC 交付报告明确标注：WFP 内核驱动安装、真实 ChatGPT 在线长会话、多操作系统本地实机交叉运行均为 `NOT_RUN`，不得据文档宣称已完成。
 
-### 2.2 Draft PR 中的实验能力
+### 2.3 已跑通但仍靠人工编排的闭环
 
-| 事项 | 当前状态 | 路线图处置 |
+“工单 → DEV → 固定 SHA → 独立 QA → `validate-card` → 合并 → 部署 → 地图记账”这条链路已有真实成功记录：
+
+- **任意外部项目实证：** `huangzuomin/geo-service-core` Actions Run `42796435020`，`FPF Independent QA (reviewer-dispatched)`，`Full-Stack` profile，head `fc3e47c3f75ec649ed3b150e0d59ba94e1a15935`，2026-11-10 执行，结论 `success`。
+- **本仓库实证：** PR #70–#76 每个切片均有对应 Actions Run（`41205180878`、`41218539037`、`41219858672`、`41221914610`、`41223289293`、`41225694824`）与 `fpf-qa-bot-huangzuomin[bot]` 的 APPROVED Review，合并 SHA 记录于 `docs/coordination/project-map.md`。
+
+但这不等于“宪制强制力已落地”：
+
+1. **状态靠人写：** `DONE / PASS / MERGED / DEPLOYED` 由协调节点或 Agent 手写进卡片、评论和地图，24 状态机库没有消费 GitHub 事件（G4）。
+2. **QA 靠人触发：** `fpf-independent-qa` 是 `workflow_dispatch`，`tested_sha`、`task_id`、`profile` 由人填写；没有“PR ready 自动触发”的事件链。
+3. **部署与记账靠人执行：** 部署没有容器 smoke 或迁移版本断言（H3），地图更新是独立 PR。
+4. **范围靠事后再解释：** 交付范围变化没有事前 `SCOPE_AMEND`，只能在新 PR 描述里追溯（H4）。
+5. **worktree 与项目边界没有生命周期：** 本机 `git worktree list` 现有 18 条记录（含主工作区），`_worktrees/` 占 0.4 GB；2026-11-10 复盘曾记录跨仓库 196 个 worktree / 19 个 dirty / 约 20–38 GB（H2）。
+
+结论：闭环“能跑”，但“可强制、可自证、可回收”尚未成立。
+
+### 2.4 Draft / 实验能力现状
+
+| 事项 | 2026-11-11 实测状态 | 路线图处置 |
 |---|---|---|
-| Issue #61 / Draft PR #62 角色派发与恢复 | 实验性实现，尚未进入 main | 纳入控制平面演进，但须先完成主干集成审查、真实 Provider Smoke 和独立 QA |
-| Codex Thread Bridge | 已定义可插拔 Driver 契约，真实写入与读取尚未完成 | 作为可选 Transport Adapter，不作为核心依赖 |
-| ChatGPT Web Transport | 已定义接口，真实登录态浏览器发送、可见性和回复读取尚未完成 | 作为可选适配器，必须单独验证 |
-| 有界协调循环 | 已有前台循环设计，不等于长期 Daemon 或托管调度 | 后续按可靠性需求演进 |
-| Issue #63 / PR #64 接力演练 | 文档流程演练，有独立 QA 审查记录；仍为 Draft | 作为流程验证参考，不视为 Runtime 产品能力 |
+| Issue #61 / Draft PR #62 角色派发与恢复 | PR #62 `OPEN`、`isDraft=true`、`mergeStateStatus=DIRTY` | 纳入控制平面演进，须先解冲突、补真实 Provider Smoke 与独立 QA |
+| Issue #63 / PR #64 接力演练 | PR #64 `OPEN`、`isDraft=true`、`mergeStateStatus=BEHIND` | 作为流程验证参考，不视为 Runtime 产品能力 |
+| Codex Thread Bridge | 已定义可插拔 Driver 契约；真实写入/读取未验证 | 作为可选 Transport Adapter，不作为核心依赖 |
+| ChatGPT Web Transport | 已定义接口与 Mock/CDP 桩；真实登录态浏览器发送、可见性、回复读取 `NOT_RUN` | 作为可选适配器，必须单独验证 |
+| 有界协调循环 / daemon | 已有骨架与单测；长期运行、跨机租约未验证 | 按可靠性需求演进 |
 
-### 2.3 尚未验证或尚未形成标准能力的事项
+### 2.5 尚未验证或尚未形成标准能力的事项
 
 - 真实 Codex Desktop 线程桥的发送、回执、执行状态、结果读取和恢复。
 - 真实已认证浏览器对指定 ChatGPT 会话的发送与回复核验。
-- Windows 11 实机环境下的完整运行、崩溃恢复和并发验证。
+- Windows 11 实机 WFP 内核驱动、完整崩溃恢复与并发验证。
+- Linux 本地原生实机交叉运行（目前只有 GitHub Actions `ubuntu-latest` 远端实机）。
 - 长期运行的调度器、跨机器 Runner 和可靠任务队列。
 - DEV 与 QA 在操作系统账户、文件系统、凭据和网络层面的完整隔离。
-- 统一的跨 Provider、跨 Runner 证据契约与符合性测试。
+- 事件驱动状态账本（G4）、项目注册表（H1）、worktree 生命周期（H2）、部署就绪门禁（H3）、范围修正协议（H4）——本路线图只给出 `PLAN_ONLY` 设计。
 - 面向第三方项目的标准化安装、升级、兼容性和认证流程。
+- 生产部署与真实计费调用：维持 `NOT_AUTHORIZED`，不在本路线图授权范围。
 
-上述能力均应保持 NOT_RUN、EXPERIMENTAL 或 PLANNED 状态，直到有固定版本、真实环境和可复核证据。
+上述能力均应保持 `NOT_RUN`、`EXPERIMENTAL` 或 `PLAN_ONLY` 状态，直到有固定版本、真实环境和可复核证据。
 
 ---
 
