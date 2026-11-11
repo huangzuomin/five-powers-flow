@@ -270,9 +270,9 @@ FPF 2.0 Stable 的判定对象是 ACC-01 至 ACC-13 的联合结果；本文件�
 
 **ACC-06（MUST）** Windows 11 原生环境落实 DEV/QA 独立账户、源码只读 ACL、Credential Broker 命名管道 ACL 与短期令牌代理、`CREATE_SUSPENDED` 绑定防逃逸及本地防火墙默认拒绝出站规则。判定方式：逐项执行身份、ACL、Broker、进程逃逸和网络旁路测试并核对实机结果。（源：§10 第 6 条）
 
-**ACC-07（MUST）** 任务状态只能由可信事实和确定性 Reducer 推进，并完整支持全局 `REVOKED`、`HUMAN_RESOLUTION_REQUIRED`、`INVALID_TEST` 独立重试预算、带制品/计数的 `QA_FAILED`、`HUMAN_REJECTED` 归档分支及 `ROLLBACK` 异常跃迁。判定方式：对正常、非法跳跃、撤销、环境故障、否决和回滚事件执行状态机测试。（源：§10 第 7 条）
+**ACC-07（MUST）** 任务状态只能由可信事实和确定性 Reducer 推进，治理生命周期完备支持全局 `REVOKED` 立即中断、`HUMAN_RESOLUTION_REQUIRED` 正式状态与人工裁决、`INVALID_TEST` 独立环境重试预算、`QA_FAILED`（绑定失败制品与计数）、纠偏后的 `HUMAN_REJECTED` 归档分支及 `ROLLBACK` 等全异常跃迁。判定方式：对正常、非法跳跃、撤销、环境故障、否决和回滚事件执行状态机测试。（源：§10 第 7 条）
 
-**ACC-08（MUST）** Evidence Engine 依据五维证据模型和 Profile 量化门槛验证来源、完整性和验收覆盖，达到 100% 测试成功率、100% 验收覆盖率，并执行 Release Profile 三主体防兼任。判定方式：用缺失来源、错误 SHA、覆盖缺口和主体兼任反例确认门禁均拒绝。（源：§10 第 8 条）
+**ACC-08（MUST）** Evidence Engine 基于五维证据模型（Provenance、Reproducibility、Isolation、Independence、Coverage）与 Profile 量化门槛矩阵（100% 测试成功率、100% 验收覆盖率、Release Profile 三主体防兼任铁律）验证来源、完整性与验收覆盖。判定方式：用缺失来源、错误 SHA、覆盖缺口和主体兼任反例确认门禁均拒绝。（源：§10 第 8 条）
 
 **ACC-09（MUST）** FPF Conformance Suite 具备基于 Declared Capabilities 的确定性硬门禁、零依赖基础校验器和黄金测试向量信任根，并与概率性 Agent Evaluation 分轨独立出具报告。判定方式：对能力声明、标准元模型、黄金向量、双校验器和评测报告分别核验独立产物。（源：§10 第 9 条）
 
