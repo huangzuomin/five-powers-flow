@@ -43,8 +43,27 @@
 
 本文件首次为该协议提供可跟踪载体。强制登记表（`.fpf/stations.yaml`）与其门禁接入属 G2 切片，本文件不预先声明其已生效。
 
-## 五、当前未生效项（如实记录）
+## 五、生效状态（G2 已合入，2026-11-12 更新）
 
-- `.fpf/stations.yaml` 尚未入库，门禁**尚未**校验工位身份。
-- 因此本文件目前是**规范意图**，不是可执行的强制约束。
-- G2 落地后，本节应改写为"已生效"，并附负向测试证据（非登记工位身份发 QA review 必须被拒）。
+- `.fpf/stations.yaml` 已随 PR #85 入库（合并 SHA `2da17a9e2c7a3f0b3b691440ae03c0b9eb471ced`），门禁从 **PR base commit** 读取登记表（`git show {base}:.fpf/stations.yaml`），因此改表者不能即时为自己授权，新关系合并后才生效。
+- **已生效的强制点**（`packages/fpf_policy/pr_gate.py`，路由 `CODE_PR` / `GATE_PR`）：
+  - R0：登记表缺失或结构非法即 fail-closed；
+  - R1：`QA_RESULT` 签发者必须解析到 `kind: qa-evidence`；
+  - R2：PR 作者不得解析到 `{qa, qa-evidence, ruling-carrier}` 任一工位；
+  - R3：`GATE_PR` 的第二 `APPROVED` 必须解析到 `kind: ruling-carrier`，且与 R1 工位 id 不同；
+  - R4：登记表结构校验（id/carrier 非空且唯一、kind 合法、重复键拒绝、`version: 1`）；
+  - R5：`sovereign_override` 键**存在即拒**，作者自授权分支已废除。
+- **负向证据**：`tests/test_gate_stations.py`（19 用例，含"候选 head 篡改登记表仍按 base 判定"、"`sovereign_override` 四种取值全部拒绝"）；`tests/test_qa_evidence_pipeline.py::test_gate_pr_sovereign_override_is_rejected`。全量 `python -m unittest discover -s tests -p "test_*.py"` = 211 passed。
+
+### 未覆盖范围（有意窄化，如实记录）
+
+- `MAP_PR` / `POLICY_PR` / `BOOTSTRAP_PR` 路由**不**做工位校验。
+- 登记表只接受 `github-login` 载体，因此只能登记**具备 GitHub 登录名**的身份。
+- `ST-DEV-CMD` / `ST-QA-CMD`（ChatGPT 会话）与 `ST-DEV-01` / `ST-QA-01`（Codex worker）**不在** `.fpf/stations.yaml` 内：它们没有 GitHub 身份载体，门禁无法解析。这四个工位目前仍是**规范意图**，不是强制约束。
+
+## 六、已知缺口（G3 / G4 输入）
+
+1. **指挥官与 worker 工位无机器载体**：新线程能读到工位名，但无法被门禁识别为对应工位；跨会话的"谁签了工单、谁做了裁决"只能靠人工考古 PR 与 `.fpf-runtime/`。
+2. **接力账本未持久化**：`WORK_ORDER` / `DEV_HANDOFF` / `QA_RESULT` 的事实散落在 PR body、review body 与未跟踪的 `.fpf-runtime/`，会话重建成本高。
+3. **GitHub 原生分支保护未收紧**：`required_approving_review_count` 维持 `0`。实测（探针 PR #86）`fpf-reviewer-huangzuomin[bot]` 在仓库权限模型中是 `permission=none`，其 `APPROVED` **不计入** required review；在单所有者仓库中 `count>=1` 需要第二个具备写权限的非作者身份，属负责人待决项（见 `docs/coordination/project-map.md` 的 `FPF2-GATE-PROBE-20261112`）。
+4. **CODEOWNERS 全部自指** `@huangzuomin`：一旦把 `require_code_owner_reviews` 与 `count>=1` 同时启用，将要求作者批准自己的 PR，必然死锁。
