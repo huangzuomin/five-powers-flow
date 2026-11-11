@@ -116,7 +116,8 @@
         "PROFILE-LIBRARY",
         "PROFILE-API-DB",
         "PROFILE-FULLSTACK",
-        "PROFILE-REWORK"
+        "PROFILE-REWORK",
+        "DOC"
       ]
     },
     "author": {
