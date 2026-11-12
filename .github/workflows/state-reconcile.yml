@@ -49,7 +49,7 @@ jobs:
       - name: Checkout replay source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref || 'main' }}
+          ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -63,10 +63,15 @@ jobs:
           FPF_TASK_ID: ${{ inputs.task_id || 'FPF2-G4-EVDEMO-01' }}
           FPF_PROJECT_ID: ${{ inputs.project_id || 'FPF' }}
           FPF_PR_NUMBER: ${{ inputs.pr_number || '0' }}
-          FPF_SOURCE_REF: ${{ inputs.source_ref || 'main' }}
+          FPF_SOURCE_REF: ${{ inputs.source_ref || github.sha }}
         run: |
           set -euo pipefail
-          if [ "$FPF_SOURCE_REF" = "main" ] && [ "${{ github.event_name }}" != "push" ]; then
+          # Only a scheduled run, or an explicit dispatch of main, may publish the
+          # authoritative audit. Anything replaying another commit is a trial and
+          # is labelled as such, so branch code can never masquerade as the audit.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            CHECK_NAME="fpf-state-ledger-audit"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$FPF_SOURCE_REF" = "main" ]; then
             CHECK_NAME="fpf-state-ledger-audit"
           else
             CHECK_NAME="fpf-state-ledger-audit-trial"
