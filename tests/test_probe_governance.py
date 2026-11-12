@@ -35,6 +35,9 @@ class FakeGitHub:
         self._lock = threading.Lock()
         self._tag_seq = 0
         self.raise_uncertain = False
+        # Simulates the observed /git/refs read-after-write lag: the next N
+        # GETs for a ref return 404 even though the ref exists.
+        self.hidden_get_counts: dict[str, int] = {}
 
     def _tag(self, message: str) -> str:
         with self._lock:
@@ -58,6 +61,9 @@ class FakeGitHub:
                 return 201, {"object": {"sha": payload["sha"]}}
         if method == "GET" and "/git/ref/" in path:
             ref = "refs/" + path.split("/git/ref/", 1)[1]
+            if self.hidden_get_counts.get(ref, 0) > 0:
+                self.hidden_get_counts[ref] -= 1
+                return 404, {"message": "Not Found"}
             with self._lock:
                 value = self.refs.get(ref)
             return (200, value) if value else (404, {"message": "Not Found"})
@@ -236,6 +242,36 @@ class SlotTests(unittest.TestCase):
         with self.assertRaises(ProbeError) as ctx:
             self.consumer(client, entry).claim()
         self.assertEqual(ctx.exception.code, "PROBE_SLOT_CORRUPT")
+
+    def test_create_readback_tolerates_replication_lag(self) -> None:
+        # Run 43164029506: POST /git/refs returned 201, the immediate GET 404'd,
+        # and the run burned slot-001 while emitting no probe evidence.
+        client, entry = FakeGitHub(), load_registry(build_registry())[0]
+        prefix = f"{PROBE_REF_PREFIX}consumption/{entry.authorization_id}/"
+        client.hidden_get_counts[prefix + "slot-001"] = 2
+        outcome = self.consumer(client, entry).claim()
+        self.assertEqual(outcome.state, "BOUND")
+        self.assertEqual(outcome.slot, "slot-001")
+        self.assertIn(prefix + "slot-001", client.refs)
+        self.assertTrue(any(item["event"] == "settle" for item in outcome.log))
+
+    def test_persistent_readback_gap_stays_fail_closed(self) -> None:
+        client, entry = FakeGitHub(), load_registry(build_registry())[0]
+        prefix = f"{PROBE_REF_PREFIX}consumption/{entry.authorization_id}/"
+        client.hidden_get_counts[prefix + "slot-001"] = 100
+        with self.assertRaises(ProbeError) as ctx:
+            self.consumer(client, entry).claim()
+        self.assertEqual(ctx.exception.code, "PROBE_SLOT_CORRUPT")
+
+    def test_conflict_readback_tolerates_replication_lag(self) -> None:
+        client, entry = FakeGitHub(), load_registry(build_registry())[0]
+        prefix = f"{PROBE_REF_PREFIX}consumption/{entry.authorization_id}/"
+        self.consumer(client, entry, run_id="1").claim()
+        client.hidden_get_counts[prefix + "slot-001"] = 3
+        outcome = self.consumer(client, entry, run_id="2").claim()
+        self.assertEqual(outcome.state, "BOUND")
+        self.assertEqual(outcome.slot, "slot-002")
+        self.assertTrue(any(item["event"] == "occupied" for item in outcome.log))
 
 
 class ProbeRunTests(unittest.TestCase):
