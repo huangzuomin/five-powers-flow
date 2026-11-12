@@ -115,6 +115,7 @@ def lifecycle_events(
             "scope": "G4 test",
             "allowed_paths": ["packages/fpf_coordinator/dispatch/"],
             "expires_at": expire_at,
+            "expiry_binding": "absolute",
             "baseline_sha": BASE,
         },
         sequence=sequence,
@@ -511,6 +512,103 @@ class TestProjectionAndReconciliation(unittest.TestCase):
         self.assertIsNone(result.projection["decision"]["role"])
         self.assertNotIn(Phase.STALE, TERMINAL_PHASES)
         self.assertNotIn(Phase.REQUIRES_HUMAN, TERMINAL_PHASES)
+
+
+class TestAuthorizationContract(unittest.TestCase):
+    """P0-01: a grant never gets an invented expiry, and never defaults open."""
+
+    def _delivery(self, **overrides):
+        value = {
+            "kind": "POLICY_CHANGE",
+            "task_id": TASK,
+            "scope_grant_id": "grant-1",
+            "scope": "G4 test",
+            "changed_files": ["packages/fpf_coordinator/dispatch/"],
+        }
+        value.update(overrides)
+        return value
+
+    def test_missing_expiry_basis_is_refused(self):
+        payload, refusal = github_source._grant_payload(
+            self._delivery(), HEAD, BASE, 42, TASK)
+        self.assertIsNone(payload)
+        self.assertEqual(refusal, "AUTHORIZATION_CONTRACT_MISSING")
+
+    def test_null_expiry_without_binding_is_refused(self):
+        payload, refusal = github_source._grant_payload(
+            self._delivery(scope_expires_at=None), HEAD, BASE, 42, TASK)
+        self.assertIsNone(payload)
+        self.assertEqual(refusal, "AUTHORIZATION_CONTRACT_MISSING")
+
+    def test_empty_expiry_without_binding_is_refused(self):
+        payload, refusal = github_source._grant_payload(
+            self._delivery(scope_expires_at="   "), HEAD, BASE, 42, TASK)
+        self.assertIsNone(payload)
+        self.assertEqual(refusal, "AUTHORIZATION_CONTRACT_MISSING")
+
+    def test_unparseable_expiry_is_refused(self):
+        payload, refusal = github_source._grant_payload(
+            self._delivery(scope_expires_at="not-a-timestamp"), HEAD, BASE, 42, TASK)
+        self.assertIsNone(payload)
+        self.assertEqual(refusal, "AUTHORIZATION_CONTRACT_INVALID")
+
+    def test_explicit_commit_binding_is_accepted(self):
+        payload, refusal = github_source._grant_payload(
+            self._delivery(scope_expires_at=None, scope_binding="tested_code_sha"),
+            HEAD, BASE, 42, TASK,
+        )
+        self.assertEqual(refusal, "")
+        self.assertIsNone(payload["expires_at"])
+        self.assertEqual(payload["expiry_binding"], "tested_code_sha")
+        self.assertEqual(payload["bound_sha"], HEAD)
+
+    def test_schema_rejects_a_grant_without_any_expiry_basis(self):
+        with self.assertRaises(EventValidationError):
+            event("SCOPE_GRANTED", {
+                "grant_id": "grant-1",
+                "scope": "G4 test",
+                "allowed_paths": [],
+                "baseline_sha": BASE,
+            }, sequence=0)
+
+    def test_schema_rejects_a_garbage_absolute_expiry(self):
+        with self.assertRaises(EventValidationError):
+            event("SCOPE_GRANTED", {
+                "grant_id": "grant-1",
+                "scope": "G4 test",
+                "allowed_paths": [],
+                "baseline_sha": BASE,
+                "expires_at": "not-a-timestamp",
+                "expiry_binding": "absolute",
+            }, sequence=0)
+
+    def test_commit_bound_grant_lapses_when_head_moves(self):
+        opened = event("TASK_OPENED", {
+            "task_id": TASK, "project_id": PROJECT, "baseline_sha": BASE,
+            "max_attempts": 3, "created_at": "2026-11-12T00:00:00Z",
+            "record_url": "https://github.com/huangzuomin/five-powers-flow/pull/42",
+        }, sequence=0, sha=BASE)
+        work = event("WORK_ORDER_OPENED", {
+            "work_order_id": TASK, "task_id": TASK,
+        }, sequence=1, causation_id=opened.event_id)
+        grant = event("SCOPE_GRANTED", {
+            "grant_id": "grant-1", "scope": "G4 test", "allowed_paths": [],
+            "expires_at": None, "expiry_binding": "tested_code_sha",
+            "bound_sha": HEAD, "baseline_sha": BASE,
+        }, sequence=2, causation_id=work.event_id)
+
+        settled = reduce([opened, work, grant])
+        self.assertTrue(settled.projection["facts"]["scope_authorized"])
+        self.assertIsNone(settled.projection["facts"]["grant_expires_at"])
+        self.assertEqual(settled.projection["facts"]["grant_bound_sha"], HEAD)
+
+        drifted = event("POLICY_CHANGE_DELIVERY_RECEIVED", {
+            "tested_code_sha": NEXT, "baseline_sha": BASE, "grant_id": "grant-1",
+            "author": "dev-a", "checks": [],
+        }, sequence=3, sha=NEXT, causation_id=grant.event_id)
+        result = reduce([opened, work, grant, drifted])
+        self.assertIn("AUTHORIZATION_EXPIRED", result.reasons)
+        self.assertEqual(result.projection["decision"]["phase"], "BLOCKED_UNAUTHORIZED_SCOPE")
 
 
 class TestJournalAggregateCAS(unittest.TestCase):

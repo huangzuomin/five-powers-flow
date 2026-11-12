@@ -75,7 +75,7 @@ SOURCE_KEYS = frozenset({"backend", "repo", "object", "object_id", "sequence"})
 PAYLOAD_REQUIRED: dict[str, frozenset[str]] = {
     "TASK_OPENED": frozenset({"task_id", "project_id", "baseline_sha", "max_attempts", "created_at"}),
     "WORK_ORDER_OPENED": frozenset({"work_order_id", "task_id"}),
-    "SCOPE_GRANTED": frozenset({"grant_id", "scope", "allowed_paths", "expires_at", "baseline_sha"}),
+    "SCOPE_GRANTED": frozenset({"grant_id", "scope", "allowed_paths", "baseline_sha"}),
     "SCOPE_REVOKED": frozenset({"grant_id", "revoked_at"}),
     "SCOPE_EXPIRED": frozenset({"grant_id", "expired_at"}),
     "QA_ADMISSION_GRANTED": frozenset({"verdict", "qa_plan_sha", "reason"}),
@@ -123,6 +123,7 @@ PAYLOAD_ALLOWED_EXTRA = frozenset({
     "qa_contract_sha", "qa_run_id", "qa_artifact_id", "review_id",
     "review_commit_id", "review_state", "delivery_kind", "changed_files",
     "risk_acknowledged", "authorization_ref", "authorized_by", "scope_expires_at",
+    "expiry_binding", "bound_sha",
     "check_name", "conclusion", "app_id", "head_sha", "expected_digest",
     "observed_digest", "first_divergence", "artifact_id", "result",
     "evidence_digest", "work_order_id", "max_attempts", "created_at",
@@ -143,6 +144,7 @@ class EventBatch:
     events: tuple["NormalizedEvent", ...]
     cursor: str | None = None
     complete: bool = True
+    refusals: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -292,7 +294,52 @@ def _validate_payload(event_type: str, payload: Any) -> dict[str, Any]:
                 "tested_sha", "runner_sha", "qa_contract_sha", "review_commit_id"):
         if key in normalized:
             _validate_sha_or_null(normalized[key], key)
+    if event_type == "SCOPE_GRANTED":
+        _validate_grant_contract(normalized)
     return normalized
+
+
+def _validate_grant_contract(payload: dict[str, Any]) -> None:
+    """A grant must state exactly one machine-checkable expiry basis.
+
+    There are two acceptable bases and nothing else:
+
+    * ``expiry_binding == "absolute"`` - a real calendar instant in ``expires_at``.
+    * ``expiry_binding == "tested_code_sha"`` - no calendar instant at all; the
+      grant is valid only for the commit in ``bound_sha`` and lapses the moment
+      the head moves.
+
+    A missing, empty, null or unparseable basis is rejected.  The adapter must
+    never invent an expiry to satisfy the schema; that is the defect this guard
+    exists to prevent.
+    """
+    binding = payload.get("expiry_binding")
+    expires_at = payload.get("expires_at")
+    if binding is None:
+        raise EventValidationError(
+            "MISSING_PAYLOAD_FIELD", "expiry_binding (absolute|tested_code_sha)")
+    if binding not in ("absolute", "tested_code_sha"):
+        raise EventValidationError("INVALID_EXPIRY_BINDING", repr(binding))
+    if binding == "absolute":
+        if expires_at is None or str(expires_at).strip() == "":
+            raise EventValidationError(
+                "INVALID_AUTHORIZATION_CONTRACT",
+                "absolute expiry requires a non-empty expires_at")
+        payload["expires_at"] = normalize_timestamp(expires_at)
+        if payload.get("bound_sha") is not None:
+            raise EventValidationError(
+                "INVALID_AUTHORIZATION_CONTRACT",
+                "absolute expiry must not also bind to a commit")
+        return
+    if expires_at is not None and str(expires_at).strip() != "":
+        raise EventValidationError(
+            "INVALID_AUTHORIZATION_CONTRACT",
+            "tested_code_sha binding must not carry a calendar expires_at")
+    payload["expires_at"] = None
+    bound = payload.get("bound_sha")
+    if not isinstance(bound, str) or not SHA_RE.fullmatch(bound.lower()):
+        raise EventValidationError("INVALID_AUTHORIZATION_CONTRACT", "bound_sha required")
+    payload["bound_sha"] = bound.lower()
 
 
 def _event_identity_fields(envelope: Mapping[str, Any]) -> dict[str, Any]:

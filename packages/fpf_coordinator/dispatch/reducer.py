@@ -63,6 +63,7 @@ class FactState:
     scope: str = ""
     allowed_paths: tuple[str, ...] = ()
     grant_expires_at: str | None = None
+    grant_bound_sha: str | None = None
     work_order: dict[str, Any] | None = None
     qa_admission: dict[str, Any] | None = None
     dev_card: dict[str, Any] | None = None
@@ -123,6 +124,7 @@ class FactState:
             "scope": self.scope,
             "allowed_paths": list(self.allowed_paths),
             "grant_expires_at": self.grant_expires_at,
+            "grant_bound_sha": self.grant_bound_sha,
             "scope_authorized": self.scope_authorized,
             "work_order": self.work_order is not None,
             "qa_admission_verdict": (
@@ -209,10 +211,17 @@ def _fold(facts: FactState, event: NormalizedEvent, reasons: list[str]) -> None:
     payload = event.payload
     event_type = event.type
 
-    if event_type in ADVANCING_EVENTS and facts.scope_authorized and facts.grant_expires_at:
-        if parse_timestamp(event.occurred_at) >= parse_timestamp(facts.grant_expires_at):
-            facts.authorization_expired = True
-            reasons.append("AUTHORIZATION_EXPIRED")
+    if event_type in ADVANCING_EVENTS and facts.scope_authorized:
+        if facts.grant_expires_at:
+            if parse_timestamp(event.occurred_at) >= parse_timestamp(facts.grant_expires_at):
+                facts.authorization_expired = True
+                reasons.append("AUTHORIZATION_EXPIRED")
+        elif facts.grant_bound_sha:
+            # A commit-bound grant lapses the moment the head it was issued for
+            # is no longer the head being advanced.
+            if event.sha and str(event.sha).lower() != facts.grant_bound_sha:
+                facts.authorization_expired = True
+                reasons.append("AUTHORIZATION_EXPIRED")
 
     if event_type == "TASK_OPENED":
         facts.baseline_sha = _sha(payload.get("baseline_sha"))
@@ -228,13 +237,27 @@ def _fold(facts: FactState, event: NormalizedEvent, reasons: list[str]) -> None:
 
     if event_type == "SCOPE_GRANTED":
         grant_id = str(payload["grant_id"])
-        expires_at = str(payload["expires_at"])
-        if parse_timestamp(expires_at) <= parse_timestamp(event.occurred_at):
-            facts.scope_authorized = False
-            facts.scope_grant_id = None
-            facts.authorization_expired = True
-            reasons.append("AUTHORIZATION_EXPIRED")
-            return
+        binding = str(payload.get("expiry_binding") or "absolute")
+        expires_at: str | None
+        bound_sha: str | None
+        if binding == "tested_code_sha":
+            expires_at = None
+            bound_sha = str(payload.get("bound_sha") or "").lower() or None
+            if bound_sha and event.sha and str(event.sha).lower() != bound_sha:
+                facts.scope_authorized = False
+                facts.scope_grant_id = None
+                facts.authorization_expired = True
+                reasons.append("AUTHORIZATION_EXPIRED")
+                return
+        else:
+            expires_at = str(payload["expires_at"])
+            bound_sha = None
+            if parse_timestamp(expires_at) <= parse_timestamp(event.occurred_at):
+                facts.scope_authorized = False
+                facts.scope_grant_id = None
+                facts.authorization_expired = True
+                reasons.append("AUTHORIZATION_EXPIRED")
+                return
         if facts.scope_grant_id and facts.scope_grant_id != grant_id:
             facts.dev_card = None
             facts.qa_plan = None
@@ -244,6 +267,7 @@ def _fold(facts: FactState, event: NormalizedEvent, reasons: list[str]) -> None:
         facts.scope = str(payload.get("scope", ""))
         facts.allowed_paths = tuple(str(item) for item in payload.get("allowed_paths", []))
         facts.grant_expires_at = expires_at
+        facts.grant_bound_sha = bound_sha
         facts.baseline_sha = _sha(payload.get("baseline_sha"))
         facts.scope_authorized = True
         facts.authorization_expired = False
@@ -253,6 +277,8 @@ def _fold(facts: FactState, event: NormalizedEvent, reasons: list[str]) -> None:
         if not facts.scope_grant_id or str(payload.get("grant_id")) == facts.scope_grant_id:
             facts.scope_authorized = False
             facts.scope_grant_id = None
+            facts.grant_bound_sha = None
+            facts.grant_expires_at = None
             facts.dev_validated = False
             facts.qa_plan = None
             facts.qa_card = None
@@ -500,6 +526,7 @@ def reduce_events(
     prepared = prepare_events(batch)
     is_complete = batch.complete if complete is None else bool(complete)
     reasons = list(prepared.reasons)
+    reasons.extend(batch.refusals)
     if not is_complete:
         reasons.append("EVENT_SET_INCOMPLETE")
     facts = FactState(task_id=task_id, project_id=project_id)

@@ -13,7 +13,14 @@ import yaml
 
 from packages.fpf_coordinator.coordinator import extract_yaml_block
 
-from .events import EventBatch, NormalizedEvent, build_event, digest_payload
+from .events import (
+    EventBatch,
+    EventValidationError,
+    NormalizedEvent,
+    build_event,
+    digest_payload,
+    normalize_timestamp,
+)
 
 
 API_ROOT = "https://api.github.com"
@@ -106,6 +113,47 @@ def _card(body: str, kind: str) -> dict[str, Any] | None:
 
 def _time(value: Any, fallback: str) -> str:
     return str(value or fallback)
+
+
+def _grant_payload(
+    delivery: Mapping[str, Any],
+    head_sha: str,
+    base_sha: str,
+    pr_number: int,
+    task_id: str,
+) -> tuple[dict[str, Any] | None, str]:
+    """Build an authorization payload from declared facts only.
+
+    A card may state a calendar expiry, or it may bind the grant to the exact
+    commit under test.  It may not leave the question open: a missing, null,
+    empty or unparseable basis yields no grant at all, and the caller marks the
+    event set incomplete.  Nothing here ever invents a date.
+    """
+    raw_expiry = delivery.get("scope_expires_at")
+    binding = str(delivery.get("scope_binding") or "").strip().lower()
+    payload: dict[str, Any] = {
+        "grant_id": str(delivery.get("scope_grant_id") or f"gr-{pr_number}-{base_sha[:12]}"),
+        "scope": str(delivery.get("scope") or task_id),
+        "baseline_sha": base_sha,
+    }
+    allowed_paths = delivery.get("changed_files") or []
+    if not isinstance(allowed_paths, list):
+        raise GitHubSourceError("changed_files must be a list")
+    payload["allowed_paths"] = allowed_paths
+
+    if raw_expiry is not None and str(raw_expiry).strip() != "":
+        try:
+            payload["expires_at"] = normalize_timestamp(raw_expiry)
+        except EventValidationError:
+            return None, "AUTHORIZATION_CONTRACT_INVALID"
+        payload["expiry_binding"] = "absolute"
+        return payload, ""
+    if binding in ("tested_code_sha", "head_sha"):
+        payload["expires_at"] = None
+        payload["expiry_binding"] = "tested_code_sha"
+        payload["bound_sha"] = head_sha
+        return payload, ""
+    return None, "AUTHORIZATION_CONTRACT_MISSING"
 
 
 def _event(
@@ -206,6 +254,8 @@ def build_events_from_pr(
     author = _actor(pr.get("user"))
     events: list[NormalizedEvent] = []
     sequence = 0
+    complete = True
+    refusals: list[str] = []
     causation: str | None = None
 
     causation = _event(
@@ -257,36 +307,31 @@ def build_events_from_pr(
         ).event_id
         sequence += 1
 
-        expires_at = str(
-            delivery.get("scope_expires_at")
-            or "9999-12-31T23:59:59.000000Z"
-        )
         grant_id = str(delivery.get("scope_grant_id") or f"gr-{pr_number}-{base_sha[:12]}")
         allowed_paths = delivery.get("changed_files") or []
         if not isinstance(allowed_paths, list):
             raise GitHubSourceError("changed_files must be a list")
-        causation = _event(
-            events,
-            type="SCOPE_GRANTED",
-            task_id=task_id,
-            project_id=project_id,
-            actor=author,
-            source_object="pull_request",
-            object_id=pr_number,
-            sequence=sequence,
-            occurred_at=created_at,
-            payload={
-                "grant_id": grant_id,
-                "scope": str(delivery.get("scope") or task_id),
-                "allowed_paths": allowed_paths,
-                "expires_at": expires_at,
-                "baseline_sha": base_sha,
-            },
-            repo=repo,
-            sha=head_sha,
-            causation_id=causation,
-        ).event_id
-        sequence += 1
+        grant_payload, grant_refusal = _grant_payload(delivery, head_sha, base_sha, pr_number, task_id)
+        if grant_payload is None:
+            refusals.append(grant_refusal)
+            complete = False
+        else:
+            causation = _event(
+                events,
+                type="SCOPE_GRANTED",
+                task_id=task_id,
+                project_id=project_id,
+                actor=author,
+                source_object="pull_request",
+                object_id=pr_number,
+                sequence=sequence,
+                occurred_at=created_at,
+                payload=grant_payload,
+                repo=repo,
+                sha=head_sha,
+                causation_id=causation,
+            ).event_id
+            sequence += 1
 
         causation = _event(
             events,
@@ -452,7 +497,8 @@ def build_events_from_pr(
     return EventBatch(
         events=tuple(events),
         cursor=f"github:{repo}:pull:{pr_number}:{head_sha}",
-        complete=True,
+        complete=complete and not refusals,
+        refusals=tuple(refusals),
     )
 
 
