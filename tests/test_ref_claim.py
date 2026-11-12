@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import base64
+import pathlib
+import sys
 import threading
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from fpf_unittest_support import suite_from_globals  # noqa: E402
 
 from packages.fpf_coordinator.dispatch.claims import (
     ClaimConflict,
@@ -213,3 +219,7 @@ def test_facts_client_maps_station_carriers() -> None:
         "content": base64.b64encode(text.encode("utf-8")).decode("ascii"),
     }
     assert client.stations("main") == {"bot-reviewer[bot]": "qa-evidence"}
+
+
+def load_tests(loader, tests, pattern):
+    return suite_from_globals(globals())

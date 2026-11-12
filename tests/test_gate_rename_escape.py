@@ -2,7 +2,12 @@
 """A-01 / A-02: a rename source inside a protected tree cannot escape gating."""
 from __future__ import annotations
 
-import pytest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from fpf_unittest_support import raises, suite_from_globals  # noqa: E402
 
 from packages.fpf_policy import pr_gate
 
@@ -27,7 +32,7 @@ def test_a5_0_negative_baseline_reproduces_the_hole() -> None:
 
 
 def test_a5_1_code_pr_rename_out_is_refused() -> None:
-    with pytest.raises(ValueError, match="re-submit as POLICY_CHANGE"):
+    with raises(ValueError, match="re-submit as POLICY_CHANGE"):
         pr_gate.promote_doc_route("CODE_PR", ["docs/x.md"], {AUTH_PATH})
 
 
@@ -36,14 +41,14 @@ def test_a5_2_policy_change_rename_out_becomes_gate_pr() -> None:
 
 
 def test_a5_3_map_pr_rename_out_is_refused() -> None:
-    with pytest.raises(ValueError, match="re-submit as POLICY_CHANGE"):
+    with raises(ValueError, match="re-submit as POLICY_CHANGE"):
         pr_gate.promote_doc_route(
             "MAP_PR", ["docs/coordination/project-map.md"], {AUTH_PATH},
         )
 
 
 def test_a5_4_bootstrap_rename_out_is_refused() -> None:
-    with pytest.raises(ValueError, match="re-submit as POLICY_CHANGE"):
+    with raises(ValueError, match="re-submit as POLICY_CHANGE"):
         pr_gate.promote_doc_route("BOOTSTRAP_PR", [".fpf/project.yaml"], {AUTH_PATH})
 
 
@@ -74,6 +79,10 @@ def test_a5_8_rename_source_listed_in_files_only_does_not_raise() -> None:
 
 
 def test_a5_9_error_names_the_offending_path() -> None:
-    with pytest.raises(ValueError) as excinfo:
+    with raises(ValueError) as excinfo:
         pr_gate.promote_doc_route("CODE_PR", ["docs/x.md"], {AUTH_PATH})
     assert AUTH_PATH in str(excinfo.value)
+
+
+def load_tests(loader, tests, pattern):
+    return suite_from_globals(globals())

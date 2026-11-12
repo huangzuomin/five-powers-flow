@@ -5,6 +5,11 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from fpf_unittest_support import suite_from_globals  # noqa: E402
 
 from packages.fpf_coordinator.dispatch.authorization import (
     SCHEMA,
@@ -294,3 +299,7 @@ def test_a_healthy_ledger_reconciles_without_touching_anything() -> None:
         history=None, local_blob_sha=None, current_tip=TIP, claim_store=None,
     )
     assert decision["action"] == "PASS"
+
+
+def load_tests(loader, tests, pattern):
+    return suite_from_globals(globals())

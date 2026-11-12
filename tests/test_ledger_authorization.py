@@ -2,7 +2,12 @@
 """B-01: ledger authorizations are derived from merged GitHub facts only."""
 from __future__ import annotations
 
-import pytest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from fpf_unittest_support import raises, suite_from_globals  # noqa: E402
 
 from packages.fpf_coordinator.dispatch.authorization import (
     AUTH_DIR,
@@ -110,7 +115,7 @@ def test_authorization_accepts_a_well_formed_merged_gate_pr() -> None:
 
 
 def test_declared_identity_fields_are_refused() -> None:
-    with pytest.raises(AuthorizationError) as excinfo:
+    with raises(AuthorizationError) as excinfo:
         validate_body({
             "schema": SCHEMA, "kind": "LEDGER_INIT", "authorization_id": "a" * 64,
             "repo": "o/r", "task_id": "t", "scope": "s", "one_time": True,
@@ -127,13 +132,13 @@ def test_authorization_id_must_be_recomputable() -> None:
         "baseline_sha": BASE, "baseline_ledger_blob_sha": None,
         "expected_history_commits": 0,
     }
-    with pytest.raises(AuthorizationError) as excinfo:
+    with raises(AuthorizationError) as excinfo:
         validate_body(body)
     assert excinfo.value.reason == "AUTHORIZATION_ID_MISMATCH"
 
 
 def test_zero_history_with_a_blob_is_rejected() -> None:
-    with pytest.raises(AuthorizationError) as excinfo:
+    with raises(AuthorizationError) as excinfo:
         make_authorization(expected_history_commits=0, baseline_ledger_blob_sha="b" * 40)
     assert excinfo.value.reason == "AUTHORIZATION_HISTORY_HINT_INVALID"
 
@@ -214,3 +219,7 @@ def test_revocation_blocks_even_a_valid_authorization() -> None:
     auth = make_authorization()
     verdict = verify(auth, FakeFacts(files=[auth.path]), revoked=True)
     assert verdict.reason == "AUTHORIZATION_REVOKED"
+
+
+def load_tests(loader, tests, pattern):
+    return suite_from_globals(globals())
