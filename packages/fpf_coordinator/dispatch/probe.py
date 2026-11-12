@@ -130,7 +130,10 @@ def _require(condition: bool, code: str, detail: str = "") -> None:
 
 
 def _parse_utc(value: Any, code: str) -> str:
-    text = str(value or "")
+    if isinstance(value, datetime):
+        text = value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        text = str(value or "")
     _require(bool(UTC_RE.match(text)), code, text)
     try:
         datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ")

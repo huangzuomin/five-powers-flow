@@ -104,6 +104,14 @@ def build_registry(max_runs: int = 2, actors=("alpha", "beta")) -> str:
 
 
 class AuthorizationTests(unittest.TestCase):
+    def test_repository_registry_loads(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        entries = load_registry(
+            (root / ".fpf" / "probe-authorizations.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0].expires_at, "2026-12-12T00:00:00Z")
+
     def test_registry_roundtrip(self) -> None:
         entries = load_registry(build_registry())
         self.assertEqual(len(entries), 1)
