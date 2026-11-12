@@ -27,6 +27,7 @@ MAX_PAGES = 100
 RETRY_ROUNDS = 3
 
 EVENT_SOURCE_UNAVAILABLE = "EVENT_SOURCE_UNAVAILABLE"
+EVENT_SOURCE_MALFORMED = "EVENT_SOURCE_MALFORMED"
 EVENT_PAGINATION_INCOMPLETE = "EVENT_PAGINATION_INCOMPLETE"
 EVENT_SOURCE_SNAPSHOT_DRIFT = "EVENT_SOURCE_SNAPSHOT_DRIFT"
 EVENT_ID_CONFLICT = "EVENT_ID_CONFLICT"
@@ -78,7 +79,16 @@ def _page(
         data = data[items_key]
     if not isinstance(data, list):
         raise FactSourceError(EVENT_SOURCE_UNAVAILABLE, f"{endpoint} not a list")
-    return [item for item in data if isinstance(item, dict)]
+    # FINAL-R3/B01: the collection entry must reject, never filter. Dropping a
+    # malformed record would silently shorten the page, change its digest and
+    # hide the defect behind a "clean" collection.
+    for item in data:
+        if not isinstance(item, dict):
+            raise FactSourceError(
+                EVENT_SOURCE_MALFORMED,
+                f"Malformed non-object record in {endpoint} page {page}",
+            )
+    return list(data)
 
 
 def collect_endpoint(
@@ -361,10 +371,12 @@ def compare_event_sequence(
     left, right = list(trusted_ids), list(candidate_ids)
     if len(left) != len(right):
         raise FactSourceError(EVENT_COUNT_MISMATCH, f"{len(left)}!={len(right)}")
+    # Multiplicity first: A→A→B versus A→B→B is a duplicate defect, not a
+    # positional one, and the ruling expects that distinction to be visible.
+    if Counter(left) != Counter(right):
+        raise FactSourceError(EVENT_DUPLICATE_MISMATCH, "multiplicity differs")
     for index, (a, b) in enumerate(zip(left, right)):
         if a != b:
             raise FactSourceError(
                 EVENT_ORDER_MISMATCH, f"index {index}: {a[:12]}!={b[:12]}",
             )
-    if Counter(left) != Counter(right):
-        raise FactSourceError(EVENT_DUPLICATE_MISMATCH, "multiplicity differs")

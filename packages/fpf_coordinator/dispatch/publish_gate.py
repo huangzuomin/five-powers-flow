@@ -241,6 +241,24 @@ def trusted_replay(events: list[Mapping[str, Any]], task_id: str, project_id: st
     }
 
 
+def compare_observation_to_candidate(
+    trusted_events: Iterable[Mapping[str, Any]],
+    candidate_events: Iterable[Mapping[str, Any]],
+) -> None:
+    """FINAL-R3/B02: the trusted observation is the reference sequence.
+
+    Comparing the candidate against its own reduction only proves the reducer is
+    deterministic; it says nothing about the order the trusted collector saw.
+    """
+    trusted = list(trusted_events)
+    candidate = list(candidate_events)
+    compare_event_log(trusted, candidate)
+    compare_event_sequence(
+        [str(event.get("event_id") or "") for event in trusted],
+        [str(event.get("event_id") or "") for event in candidate],
+    )
+
+
 def _first_diff(left: Any, right: Any, path: str = "") -> str | None:
     if type(left) is not type(right):
         return f"{path or '$'}:type"
@@ -327,13 +345,9 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     observation, rounds = stable_observation(
         args.repo, args.pr_number, task_id, args.project_id, args.token,
     )
-    compare_event_log(list(observation.events), artifact["events"])
+    compare_observation_to_candidate(observation.events, artifact["events"])
 
     replay = trusted_replay(artifact["events"], task_id, args.project_id)
-    compare_event_sequence(
-        replay["ordered_ids"],
-        [str(event.get("event_id") or "") for event in artifact["events"]],
-    )
     compare_projection(replay["task"], artifact["ledger"])
 
     stale_base(manifest, _read_json(args.target, STALE_BASE))

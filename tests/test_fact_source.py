@@ -8,6 +8,7 @@ from packages.fpf_coordinator.dispatch.fact_source import (
     FactSourceError,
     EVENT_ID_CONFLICT,
     EVENT_PAGINATION_INCOMPLETE,
+    EVENT_SOURCE_MALFORMED,
     EVENT_SOURCE_UNAVAILABLE,
     EVENT_SOURCE_SNAPSHOT_DRIFT,
     EVENT_COUNT_MISMATCH,
@@ -25,6 +26,9 @@ from packages.fpf_coordinator.dispatch.fact_source import (
     sha256_hex,
     stable_observation,
     _event_id_conflicts,
+)
+from packages.fpf_coordinator.dispatch.publish_gate import (
+    compare_observation_to_candidate,
 )
 
 
@@ -123,7 +127,7 @@ class EventSequenceTests(unittest.TestCase):
     def test_duplicate_multiplicity_is_rejected(self) -> None:
         with self.assertRaises(FactSourceError) as ctx:
             compare_event_sequence(["a", "a", "b"], ["a", "b", "b"])
-        self.assertEqual(ctx.exception.code, EVENT_ORDER_MISMATCH)
+        self.assertEqual(ctx.exception.code, EVENT_DUPLICATE_MISMATCH)
 
     def test_extra_duplicate_is_rejected(self) -> None:
         with self.assertRaises(FactSourceError) as ctx:
@@ -214,6 +218,69 @@ class PaginationTests(unittest.TestCase):
         with self.assertRaises(FactSourceError) as ctx:
             collect_endpoint("o/r", "pulls/1/reviews", "t", pass_no=1, source_object="review")
         self.assertEqual(ctx.exception.code, EVENT_SOURCE_UNAVAILABLE)
+
+
+class MalformedRecordTests(unittest.TestCase):
+    """FINAL-R3/B01: the collection entry rejects, it never filters."""
+
+    def setUp(self) -> None:
+        self._original = fact_source._request
+
+    def tearDown(self) -> None:
+        fact_source._request = self._original
+
+    def _serve(self, payload) -> None:
+        fact_source._request = lambda repo, path, token: payload
+
+    def test_non_object_record_is_rejected_at_collection_entry(self) -> None:
+        self._serve([{"id": 1}, "not-an-object", {"id": 2}])
+        with self.assertRaises(FactSourceError) as ctx:
+            collect_endpoint("o/r", "pulls/1/reviews", "t", pass_no=1, source_object="review")
+        self.assertEqual(ctx.exception.code, EVENT_SOURCE_MALFORMED)
+
+    def test_envelope_non_object_record_is_rejected(self) -> None:
+        self._serve({"check_runs": [{"id": 1}, 7]})
+        with self.assertRaises(FactSourceError) as ctx:
+            collect_endpoint(
+                "o/r", "commits/abc/check-runs", "t", pass_no=1,
+                source_object="check_run", items_key="check_runs",
+            )
+        self.assertEqual(ctx.exception.code, EVENT_SOURCE_MALFORMED)
+
+    def test_a_dropped_record_cannot_look_like_a_short_final_page(self) -> None:
+        # 100 items with one malformed entry would filter down to 99 and be read
+        # as "last page" — silently ending collection one page early.
+        page = [{"id": i} for i in range(99)] + ["bad"]
+        self._serve(page)
+        with self.assertRaises(FactSourceError) as ctx:
+            collect_endpoint("o/r", "pulls/1/reviews", "t", pass_no=1, source_object="review")
+        self.assertEqual(ctx.exception.code, EVENT_SOURCE_MALFORMED)
+
+
+class ObservationSequenceTests(unittest.TestCase):
+    """FINAL-R3/B02: the trusted sequence is the reference, not the candidate's."""
+
+    @staticmethod
+    def _events(*ids: str) -> list[dict[str, str]]:
+        return [{"event_id": event_id, "payload_digest": event_id * 2} for event_id in ids]
+
+    def test_identical_sequences_pass(self) -> None:
+        events = self._events("a", "b", "c")
+        compare_observation_to_candidate(events, list(events))
+
+    def test_duplicate_multiplicity_is_rejected(self) -> None:
+        trusted = self._events("a", "a", "b")
+        candidate = self._events("a", "b", "b")
+        with self.assertRaises(FactSourceError) as ctx:
+            compare_observation_to_candidate(trusted, candidate)
+        self.assertEqual(ctx.exception.code, EVENT_DUPLICATE_MISMATCH)
+
+    def test_reordered_sequence_is_rejected(self) -> None:
+        trusted = self._events("a", "b", "c")
+        candidate = self._events("c", "b", "a")
+        with self.assertRaises(FactSourceError) as ctx:
+            compare_observation_to_candidate(trusted, candidate)
+        self.assertEqual(ctx.exception.code, EVENT_ORDER_MISMATCH)
 
 
 class RetryTests(unittest.TestCase):
