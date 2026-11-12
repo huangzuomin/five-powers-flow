@@ -139,3 +139,31 @@
 - **待负责人裁定**：① 机器账号方案（write 协作者，`count=1` 可达但引入长期人格式凭据）；② 平台门禁为准（维持 `count=0`，以 `validate-card` 为唯一强制点，并改写 §8.7.2 该条）；③ 重构 CODEOWNERS 指向真实非作者账号后与 ① 组合
 - **NOT_RUN / 边界**：本轮只验证 App 身份；机器账号方案未创建、未验证
 - **归档时间**：2026-11-12
+
+### [FPF2-G3-20261112] 凭据与身份边界：确定性密钥扫描 + 私钥迁出工作区
+- **目标**：把"零跟踪密钥"升级为"零工作区私钥 + 三层扫描"，并留下可核验的轮换账簿
+- **代码提交**：`6cac312c27a8c74482f7e89421efa3227f270c8d`
+- **主干合并**：`1475f6b40002c32b351f336ec20f597e5f9aa999`（PR #89，merge commit）
+- **独立 QA**：Run `43066178254` / Artifact `13876241752` / `evidence_manifest_sha256=e2fcfedb262e6debf0d8b4651725d7d20e4634098dbe5168d9fa30d2ebcf3f17`，`task_id=FPF2-G3`、`tested_sha=6cac312c`、`runner_sha`=`qa_contract_sha`=`952accfd`、16 项 PASS
+- **独立 Review**：`5862645744`（`fpf-qa-bot-huangzuomin[bot]`，含 `QA_RESULT`，钉 `6cac312c`）+ `5862650215`（`fpf-reviewer-huangzuomin[bot]`，钉同一 head，承载负责人 2026-11-12 授权）
+- **变更范围**：`packages/fpf_gates/secret_scan.py`（离线确定性扫描器，5 类规则 + 64 位 hex 种子上下文规则）、`packages/fpf_gates/install_hooks.py`（生成 `.githooks/pre-commit`）、`.github/workflows/secret-scan.yml`、`tests/test_secret_scan.py`（13 用例，含真实 git 仓库中 hook 阻断暂存密钥）、`docs/security/CREDENTIAL-BOUNDARY.md`
+- **操作侧事实**：issuer 私钥 `k_stage_alpha_2026_11` 于 `2026-11-11T05:44:17Z` 吊销、新 key `k_stage_alpha_2026_11_r1` 于 `2026-11-11T05:40:12Z` 生成，存于 `%LOCALAPPDATA%\FPF\secrets`（仓库外）；两个 bot App 私钥同迁出，工作区 `.fpf-runtime/credentials/` 已空，两身份 token 均验证可铸造
+- **扫描证据**：跟踪文件 0 命中；`git log --all --patch` 459 个 diff / 35,554 新增行，2 命中且均为 AWS 厂商占位值
+- **NOT_RUN / 边界**：
+  - 验收标准 5 为 **`PARTIAL`**：工作区零命中已达成，但私钥仍是磁盘明文（仓库外 ACL 目录），**未**进 OS 凭据库；运行时短时令牌属阶段 3 Credential Broker
+  - Library profile 不执行测试套件，新增 13 项测试由 `validate` check run 独立执行（224 passed），不在 QA artifact 内（已写入 `QA_RESULT.findings.p1`）
+  - `secret-scan` 尚未加为 required check；`install_hooks.py` 未在本机执行（会遮蔽现有 `.git/hooks/pre-push`）
+  - 生产部署与真实计费 `NOT_AUTHORIZED`；G4–H4 `PLAN_ONLY`
+- **归档时间**：2026-11-12
+
+### [FPF2-G2-C4-20261112] 强制点裁定：`validate-card` 为唯一强制点
+- **目标**：把 G2 的 review-count 缺口从"配置 `count=1`"改为有书面理由与残余风险清单的裁定，并拆除哑开关陷阱
+- **代码提交**：`2493d10a2ea99ba60d46dd3646a8af560a19e3e6`
+- **主干合并**：`68f38b85205bd2437b99f82dfb0f938655e63fd0`（PR #90，merge commit）
+- **独立 Review**：`5867000430`（`fpf-reviewer-huangzuomin[bot]`，APPROVED，钉 `2493d10a`，承载负责人 Phase C4 裁定原文）
+- **变更范围**：`docs/roadmap/FPF-2.0-STANDARDIZATION-ROADMAP.md` §8.7.2 重写为五节（现状证据 / 语义强度对比 / 选项否决理由 / 残余风险与缓解 / 验收标准）
+- **设置操作（仓库设置，非代码）**：`require_code_owner_reviews` `true` → **`false`**；`required_approving_review_count` 维持 `0`；required checks（`validate` + `validate-card`，`strict=true`）与 `enforce_admins=true` 未改动。前后快照：`.fpf-runtime/evidence/20261112-c4-forcing-point/protection-{before,after}-20261112T1730Z.json`
+- **裁定要点**：① `count=0` 下原生 review 计数惰性，合并事实由 required checks 决定；② `validate-card` 校验身份链（作者排除、head 钉定、`QA_RESULT`、run actor、artifact digest、第二工位、自授权拒绝），严格覆盖"计数"；③ 否决机器 USER、App 承担 required review、重构 CODEOWNERS 三条路径；④ `require_code_owner_reviews=true` 与 `count>=1` 叠加会要求作者自批，构成哑开关陷阱
+- **事实纠正**：工单所称"PR #67/#78 零 review 合并先例"不成立——API 实测 #67 有 5 条 review、#78 有 1 条；可成立的表述是这些 review 在 `count=0` 下只对 `validate-card` 有意义
+- **NOT_RUN / 边界**：未验证"机器 USER + write 协作者"路径（已否决，不实施）；G3–H4 中 G4–H4 维持 `PLAN_ONLY`
+- **归档时间**：2026-11-12

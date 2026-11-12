@@ -87,3 +87,24 @@
 - **根因**：强制力 = 载体（可跟踪文件）+ 解析器（门禁可判定）+ 负向测试。三者缺一，机制都只停留在声明。
 - **治理红线**：声称"某协同机制已生效"前，必须能指出①载体路径 ②门禁解析代码位置 ③至少一条负向用例。缺任一项只能表述为"规范意图"或 `PLAN_ONLY`。
 - **复犯计数**：1 / 3
+
+### `[LESSON-013]` 基于 `git ls-files` 的扫描必须先 `git add`，否则新文件等于没扫
+- **触发源**：G3 切片（2026-11-12，PR #89 首次推送）
+- **缺陷现象**：本地 `scan_secrets.py --tracked` 报 0 命中、全量 224 测试全绿；CI 的 `secret-scan` 与 `validate` 同时失败——命中的是 `packages/fpf_gates/secret_scan.py` 自己的 OPENSSH 私钥规则定义行。
+- **根因**：扫描器与测试都遍历 `git ls-files`，而本地验证跑在 `git add` **之前**，新文件尚未被跟踪，因此既没被扫描也没被测试覆盖。CI 检出后文件已跟踪，问题立刻暴露。
+- **治理红线**：凡是"扫描/统计已跟踪文件"的校验，本地验证必须放在 `git add` 之后；否则本地绿灯只证明"旧文件干净"。同时在实现侧给自己也加抑制标记，避免扫描器把规则定义当成密钥。
+- **复犯计数**：1 / 3
+
+### `[LESSON-014]` `tools/` 与 `.githooks/` 在门禁路由里不可达，会与 `.github/` 形成死锁
+- **触发源**：G3 切片（2026-11-12，PR #89 第二次推送）
+- **缺陷现象**：同一 PR 同时含 `.github/workflows/secret-scan.yml`、`tools/security/*`、`.githooks/pre-commit`。用 `POLICY_CHANGE` 报 `POLICY_CHANGE contains unrelated application files`；改用 `DEV_HANDOFF` 报 `CODE_PR modifies protected governance paths`——两种卡都出不去。
+- **根因**：`pr_gate._policy_scope` 只接受受保护前缀、`docs/`、`tests/`、`templates/` 与少数根文件；`packages/` 属受保护前缀而 `tools/` 不在任何一类。于是"受保护路径 + tools"的 PR 既不能走 `GATE_PR` 也不能走 `CODE_PR`。
+- **治理红线**：新增仓库级工具前先确认落点可路由——涉及 `.github/` 或 `packages/` 时，工具应放进受保护前缀（本次落在 `packages/fpf_gates/`），或拆分 PR 使每个 PR 的所有路径落在同一类。路由能力本身是治理约束，不只是目录偏好。
+- **复犯计数**：1 / 3
+
+### `[LESSON-015]` 工单里的"先例事实"必须实测复核，不能直接写进宪制文本
+- **触发源**：G2 C4 裁定（2026-11-12，PR #90）
+- **缺陷现象**：工单证据条款称"PR #67/#78 零 review 合并先例"。API 实测 #67 有 5 条 review、#78 有 1 条，前提不成立。
+- **根因**：把"review 主体不具仓库写权限、对原生计数无效"与"没有 review"混为一谈。
+- **治理红线**：写入路线图/宪制文本的每条先例都必须能追溯到一次 API 或仓库实测；发现前提错误时按"纠正后表述"落笔并在 PR 正文如实标注偏差，而不是照抄错误前提或默默改写。
+- **复犯计数**：1 / 3
