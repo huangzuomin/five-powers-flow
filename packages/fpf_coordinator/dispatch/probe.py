@@ -42,6 +42,10 @@ MAX_RUNS_CAP = 8
 MAX_ATTEMPTS_CAP = 6
 MAX_WINDOW_SECONDS = 120
 
+# Bounded read-after-write retry budget for slot refs (seconds). Sum is kept
+# small enough that a whole claim stays far below the probe timeout.
+READBACK_DELAYS = (1, 2, 4)
+
 
 def _nfc(value: Any) -> Any:
     if isinstance(value, str):
@@ -370,6 +374,32 @@ class SlotConsumer:
         )
         _require(ok, "PROBE_SLOT_SUBJECT_MISMATCH", name)
 
+    def _read_settled(self, name: str, log: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Read a slot ref that GitHub may not serve yet.
+
+        Observed platform fact (run 43164029506): ``POST /git/refs`` returned 201
+        and the immediate ``GET /git/ref`` returned 404. A single read therefore
+        cannot distinguish "creation lost" from "replication lag", and treating
+        the gap as corruption both burned a slot and produced no probe evidence.
+        Bounded retries keep the verdict fail-closed without the false positive.
+        """
+        stored = self.read_slot(name)
+        if stored is not None:
+            return stored
+        for delay in READBACK_DELAYS:
+            self._sleep(delay)
+            stored = self.read_slot(name)
+            log.append({
+                "at": _now(),
+                "event": "settle",
+                "slot": name,
+                "found": stored is not None,
+                "delay": delay,
+            })
+            if stored is not None:
+                return stored
+        return None
+
     def _create(self, name: str) -> int | None:
         record = self._record(name)
         try:
@@ -419,13 +449,13 @@ class SlotConsumer:
                 continue
             status = self._create(name)
             if status == 201:
-                stored = self.read_slot(name)
-                _require(stored is not None, "PROBE_SLOT_CORRUPT", f"{name} vanished")
+                stored = self._read_settled(name, log)
+                _require(stored is not None, "PROBE_SLOT_CORRUPT", f"{name} vanished after create")
                 self._verify(name, stored)
                 log.append({"at": _now(), "event": "create", "slot": name, "status": 201})
                 return SlotOutcome("BOUND", name, log)
             if status in (409, 422):
-                stored = self.read_slot(name)
+                stored = self._read_settled(name, log)
                 _require(stored is not None, "PROBE_SLOT_CORRUPT", f"{name} conflict without ref")
                 if str(stored.get("run_id")) == self._run_id:
                     self._verify(name, stored)
