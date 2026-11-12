@@ -1,0 +1,90 @@
+name: FPF Ledger Claim
+
+# D-02: this is the only workflow allowed to hold contents:write.  It runs the
+# trusted main revision of the code, never a pull-request head, and it refuses
+# to create a claim unless it can re-derive the authorization, the failure and
+# the projection itself (D-03).  A claim that exists is permanent (D-05).
+on:
+  workflow_dispatch:
+    inputs:
+      authorization_id:
+        description: sha256 id of the merged LEDGER_RECOVERY authorization
+        required: true
+        type: string
+      tip_sha:
+        description: Main tip the authorization binds
+        required: true
+        type: string
+      failure_run_id:
+        description: check run id the authorization binds
+        required: true
+        type: string
+      projection_digest:
+        description: sha256 of the projection being recovered
+        required: true
+        type: string
+      task_id:
+        description: FPF task ID whose ledger is recovered
+        required: true
+        type: string
+      project_id:
+        description: FPF project ID
+        required: true
+        default: FPF
+        type: string
+      pr_number:
+        description: Implementation PR the recovery projects
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: fpf-ledger-claim-${{ inputs.authorization_id }}
+  cancel-in-progress: false
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install pyyaml
+      - name: Re-derive facts and claim the authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BASE_SHA=$(git rev-parse HEAD)
+          echo "claiming against trusted main $BASE_SHA"
+          python -m packages.fpf_coordinator.dispatch.claims claim-verified \
+            --repo "${{ github.repository }}" \
+            --base-sha "$BASE_SHA" \
+            --authorization-id "${{ inputs.authorization_id }}" \
+            --tip-sha "${{ inputs.tip_sha }}" \
+            --failure-run-id "${{ inputs.failure_run_id }}" \
+            --projection-digest "${{ inputs.projection_digest }}" \
+            --task-id "${{ inputs.task_id }}" \
+            --project-id "${{ inputs.project_id }}" \
+            --pr-number "${{ inputs.pr_number }}" \
+            | tee claim-result.json
+      - name: Retain claim evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpf-ledger-claim-${{ github.run_id }}
+          path: claim-result.json
+          if-no-files-found: warn
+          retention-days: 90

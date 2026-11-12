@@ -230,11 +230,31 @@ def promote_doc_route(pr_type: str, files, extra_paths=None) -> str:
 
     Promotion runs on the touched set, so renaming a standard into another
     directory (including MAP_FILES) does not launder it into prose.
+
+    ``extra_paths`` carries rename sources, which ``git diff --name-only``
+    drops.  A rename source that sits in a protected tree is a governance
+    change even though the candidate diff looks like an unrelated addition, so
+    the protected test runs *before* the CODE_PR shortcut.  Routes that cannot
+    express such a change at all (CODE_PR, MAP_PR, BOOTSTRAP_PR) are refused
+    outright: promoting them would only move the failure into card validation
+    while leaving a half-valid approval path.
     """
+    extra = {normalize_repo_path(p) for p in (extra_paths or set())}
+    protected_sources = sorted(p for p in extra if is_protected(p))
+    if protected_sources:
+        if pr_type == "GATE_PR":
+            return pr_type
+        if pr_type == "POLICY_PR":
+            return "GATE_PR"
+        raise ValueError(
+            f"{pr_type} renames a protected governance path out of its tree; "
+            "re-submit as POLICY_CHANGE so the change is judged as GATE_PR: "
+            + ", ".join(protected_sources)
+        )
     if pr_type in ("GATE_PR", "CODE_PR"):
         return pr_type
     touched = {normalize_repo_path(p) for p in files}
-    touched |= {normalize_repo_path(p) for p in (extra_paths or set())}
+    touched |= extra
     if any(is_normative_standard(p) for p in touched):
         return "GATE_PR"
     return pr_type

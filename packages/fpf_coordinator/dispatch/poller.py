@@ -249,7 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--max-audit-age-seconds", type=int, default=1800)
     reconcile.add_argument(
         "--check-name", default="fpf-state-ledger-audit",
-        help="a pre-merge trial must use the -trial suffix, never the authoritative name",
+        help="authoritative audit check name; trials must pass --no-check-run instead",
     )
     reconcile.add_argument("--no-check-run", action="store_true")
     reconcile.set_defaults(func=command_reconcile)
