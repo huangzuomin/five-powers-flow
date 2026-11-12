@@ -30,7 +30,12 @@ from packages.fpf_coordinator.dispatch.reconcile import reconcile_projection
 from packages.fpf_coordinator.dispatch.reducer import reduce_events
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "g4-event-log-11.jsonl"
-FIXTURE_SHA256 = "493bfa95780981f23bfa743c7fb7651bdc0f435d167d1a3d422cebfb5ea5d317"
+FIXTURE_SHA256 = "1043faad495251a38052275d3a4c27c0132464e29f5e5f2114941f2fd8576d36"
+# The captured log is byte-identical except for one trailing suppression
+# comment, demanded because the real check name is "secret-scan".  Removing
+# that comment must reproduce the original capture exactly.
+FIXTURE_CAPTURE_SHA256 = "493bfa95780981f23bfa743c7fb7651bdc0f435d167d1a3d422cebfb5ea5d317"
+FIXTURE_SCAN_NOTE = "  # fpf-secret-scan: allow — the real workflow check name is secret-scan"
 TASK = "FPF2-G4-REDUCER-01"
 TIP = "7" * 40
 MERGE = "8" * 40
@@ -39,9 +44,11 @@ MERGE = "8" * 40
 def load_reduction(*, complete: bool = True):
     raw = FIXTURE.read_text(encoding="utf-8")
     assert sha256_hex(raw.encode("utf-8")) == FIXTURE_SHA256
+    capture = raw.replace(FIXTURE_SCAN_NOTE, "", 1)
+    assert sha256_hex(capture.encode("utf-8")) == FIXTURE_CAPTURE_SHA256
     events = tuple(
         normalize_event(json.loads(line))
-        for line in raw.splitlines() if line.strip()
+        for line in capture.splitlines() if line.strip()
     )
     batch = EventBatch(events=events, complete=complete)
     return reduce_events(batch, task_id=TASK, project_id="FPF")
