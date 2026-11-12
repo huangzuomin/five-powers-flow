@@ -59,11 +59,23 @@ def _request(
         raise GitHubSourceError(f"GitHub API returned non-JSON for {url}") from exc
 
 
-def _pages(repo: str, endpoint: str, token: str) -> list[dict]:
+def _pages(repo: str, endpoint: str, token: str,
+           items_key: str | None = None) -> list[dict]:
+    """Page a GitHub collection, unwrapping ``{"<items_key>": [...]}`` envelopes.
+
+    Most REST collections answer with a bare array, but the Actions runs endpoint
+    answers with ``{total_count, workflow_runs}``.  Treating the envelope as the
+    page itself would silently produce zero events, or raise here.
+    """
     separator = "&" if "?" in endpoint else "?"
     result: list[dict] = []
     for page in range(1, 101):
         data = _request(repo, f"{endpoint}{separator}per_page=100&page={page}", token)
+        if items_key is not None:
+            if not isinstance(data, dict) or not isinstance(data.get(items_key), list):
+                raise GitHubSourceError(
+                    f"Expected a '{items_key}' list from {endpoint}")
+            data = data[items_key]
         if not isinstance(data, list):
             raise GitHubSourceError(f"Expected a list from {endpoint}")
         result.extend(item for item in data if isinstance(item, dict))
@@ -146,7 +158,8 @@ def fetch_pr_bundle(repo: str, pr_number: int, token: str) -> dict[str, Any]:
     checks = _request(repo, f"commits/{head_sha}/check-runs?per_page=100", token)
     if isinstance(checks, dict) and isinstance(checks.get("check_runs"), list):
         check_runs = [item for item in checks["check_runs"] if isinstance(item, dict)]
-    workflows = _pages(repo, f"actions/runs?head_sha={head_sha}", token)
+    workflows = _pages(repo, f"actions/runs?head_sha={head_sha}", token,
+                       items_key="workflow_runs")
     return {
         "pr": pr,
         "reviews": reviews,

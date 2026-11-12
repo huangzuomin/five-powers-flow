@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from packages.fpf_coordinator.dispatch.events import (
     EventBatch,
@@ -22,6 +23,7 @@ from packages.fpf_coordinator.dispatch.journal import (
     ConcurrencyConflictError,
     StateJournal,
 )
+from packages.fpf_coordinator.dispatch import github_source
 from packages.fpf_coordinator.dispatch.poller import (
     genesis_ledger,
     ledger_from_reduction,
@@ -361,6 +363,24 @@ class TestDeterministicConflictRules(unittest.TestCase):
 
 
 class TestProjectionAndReconciliation(unittest.TestCase):
+    def test_actions_run_pagination_unwraps_the_envelope(self):
+        """`actions/runs` answers with {total_count, workflow_runs}, not an array."""
+        envelope = {"total_count": 2, "workflow_runs": [{"id": 1}, {"id": 2}]}
+        with mock.patch.object(github_source, "_request", return_value=envelope):
+            pages = github_source._pages(
+                REPO, "actions/runs?head_sha=" + HEAD, "token",
+                items_key="workflow_runs",
+            )
+        self.assertEqual([item["id"] for item in pages], [1, 2])
+
+    def test_actions_run_pagination_rejects_a_malformed_envelope(self):
+        with mock.patch.object(github_source, "_request", return_value=[{"id": 1}]):
+            with self.assertRaises(github_source.GitHubSourceError):
+                github_source._pages(
+                    REPO, "actions/runs?head_sha=" + HEAD, "token",
+                    items_key="workflow_runs",
+                )
+
     def test_projection_tamper_is_detected_once(self):
         values = lifecycle_events()
         result = reduce(values)
