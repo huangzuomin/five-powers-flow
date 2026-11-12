@@ -15,6 +15,8 @@
 | **FPF-AEC-20261031-F** | 持续守护进程与恢复 | DEV-Team | DONE (`8d4e8e7969d8`) | PASS (Run 41223289293) | MERGED (`2ef69643efd4`, PR #74) | DEPLOYED |
 | **FPF-AEC-20261031-G** | 终审大考与交付收口 | DEV-Team | DONE (`ac4febdd355b`) | PASS (Run 41225694824) | MERGED (`bac0088055d8`, PR #75) | DEPLOYED |
 | **FPF-2.0-ROADMAP-20261031** | FPF 2.0 路线图归并与 G2–H4 复盘新增项 | Orchestration Hub | DONE (`81289d4f5ffe`) | PASS (Run 42968508888) | MERGED (`09d4c6076295`, PR #67) | N/A (docs only) |
+| **FPF2-G4-REDUCER-01** | G4 事件驱动状态归约（PROJECTION_ONLY） | Orchestration Hub | DONE (`2aec8763b2d8`) | PASS (FINAL-R4, Run 43183534549) | MERGED (`feaafd3701cb`, PR #92) | N/A (无部署) |
+| **FPF2-GATE-ANCHOR-01** | 门禁证据要求表锚定 base（治理收紧） | Orchestration Hub | DONE (`de893a4e2730`) | PASS (Run 43180174197) | MERGED (`19ca7dc1cad2`, PR #101) | N/A |
 
 ## 二、切片详细进度记录
 
@@ -166,4 +168,36 @@
 - **裁定要点**：① `count=0` 下原生 review 计数惰性，合并事实由 required checks 决定；② `validate-card` 校验身份链（作者排除、head 钉定、`QA_RESULT`、run actor、artifact digest、第二工位、自授权拒绝），严格覆盖"计数"；③ 否决机器 USER、App 承担 required review、重构 CODEOWNERS 三条路径；④ `require_code_owner_reviews=true` 与 `count>=1` 叠加会要求作者自批，构成哑开关陷阱
 - **事实纠正**：工单所称"PR #67/#78 零 review 合并先例"不成立——API 实测 #67 有 5 条 review、#78 有 1 条；可成立的表述是这些 review 在 `count=0` 下只对 `validate-card` 有意义
 - **NOT_RUN / 边界**：未验证"机器 USER + write 协作者"路径（已否决，不实施）；G3–H4 中 G4–H4 维持 `PLAN_ONLY`
+- **归档时间**：2026-11-12
+
+### [FPF2-G4-REDUCER-01] G4 事件驱动状态归约（PROJECTION_ONLY）
+- **目标**：把"状态靠人手写"改为"事件归约产生"，不新增第二套状态机，复用 §4.1 Reconciliation Protocol
+- **代码提交**：`2aec8763b2d87550982e5976a904860ed91d45ca`（PR #92 head）
+- **主干合并**：`feaafd3701cba9c787c550f78998d529b086bb18`（PR #92，merge commit）
+- **变更范围**：`packages/fpf_coordinator/dispatch/**`（events / reducer / journal / ledger / claims / authorization / fact_source / publish_gate / poller / github_source / reconcile + `state-ledger.json`）、`.github/workflows/state-{project,project-publish,audit,reconcile,claim,claim-trigger}.yml`、`packages/fpf_policy/pr_gate.py`（仅改名逃逸路由 A-02）、`tests/**`（31 路径，+7047 行）
+- **独立 QA**：Run `43183534549` / Artifact `13927866728` / ZIP digest `sha256:66b360eb…` / `evidence_manifest_sha256=4ebbd8cf51ba2ce0a7d880dbf18c0e48d509cecf6b60b6e7a33b31b4107ba0cb`，18/18 PASS，绑定 `tested_sha=2aec876`
+- **独立 Review**：`5871448257`（`fpf-qa-bot-huangzuomin[bot]`，含 `QA_RESULT`，钉 `2aec876`）+ `5871450948`（`fpf-reviewer-huangzuomin[bot]`，钉同一 head，承载 `WO-20261112-g4-final-remediation` / `WO-20261112-gate-anchor-fix` 授权原文）
+- **语义裁决链**：R7–R11 五轮设计复裁 + FINAL / FINAL-R2（`CHANGES_REQUIRED`，B01/B02/B03）+ FINAL-R3（B03 CLOSED、B01/B02 OPEN、门禁锚定 `ACCEPTED_AS_GOVERNANCE_HARDENING`）+ FINAL-R4（`verdict: PASS`，B01/B02/B03 全 CLOSED，`merge_now_ok: false` 仅因平台审批未完成）
+- **裁决纠正的两处真实缺陷**：①`fact_source._page` 过滤而非拒绝非对象记录（100 条丢 1 条会被读成"最后一页"提前结束采集）→ 改为 `EVENT_SOURCE_MALFORMED`；②`run_gate` 用候选自身归约顺序当基准（自证）→ 改为 `compare_observation_to_candidate(observation.events, artifact["events"])`，多重性先于位置判定
+- **四个平台事实（本切片实测入 main）**：`expires_at` 被解析为 `datetime`；`refs/fpf-probe/**` 不落盘（改用 `refs/tags/`）；`GET /git/ref` 与 `matching-refs` 须省略 `refs/` 前缀；`POST /git/refs` 返回 201 后立即 GET 可能 404（读后写重试）
+- **并发实测（P1-D06-01）**：可信 main `31dc9226` 双 dispatch，run `43166501236`=1×201/35×422、run `43166501974`=0×201/36×422，请求窗口交集 **78.374s**，72 次请求恰 1 次 201，唯一 winner `7134ae093a42ea9233038783446131943b5a3cf9`；相关代码在 `6e2cbad` 上逐字节未变
+- **基线既有失败（P1-FINAL-QA-01）**：`5b4bfa2` 复跑 `test_standard_2_0` = 1 failed / 2 passed，根因 #89 遗留，非本 PR 引入
+- **NOT_RUN / 边界**：
+  - `production_claim_e2e` **NOT_RUN**（真实默认分支调度未跑）；`MERGED` 生命周期由记账 PR 合并事件收尾
+  - 生产部署与真实计费 **NOT_AUTHORIZED**；H1–H4 **PLAN_ONLY**；`sovereign_override` 零使用
+  - G3 残留移交：私钥仍在仓库外磁盘明文（ACL 目录），OS 凭据库属阶段 3
+- **归档时间**：2026-11-12
+
+### [FPF2-GATE-ANCHOR-01] 门禁证据要求表锚定 base（治理收紧）
+- **目标**：关闭"被审查者自定义本次审查标准"的漏洞，并解除由它造成的 B03 自指死锁
+- **代码提交**：`de893a4e2730b0b4be8eb1749fcc10c6152950ef`（PR #101 head）
+- **主干合并**：`19ca7dc1cad2dd88eaf9f95ad7ba8adba7361c02`（PR #101，merge commit）
+- **变更范围**：`.github/workflows/validate-handoff-cards.yml`（base 恢复行增加 `packages/fpf_coordinator/`）、`tests/test_gate_anchor.py`（5 项：workflow 接线、head 缩表不生效、head 扩表不对本 PR 生效、anchor 幂等且与 base 字节一致、base 缺包 fail-closed）
+- **独立 QA**：Run `43180174197` / Artifact `fpf-qa-de893a4…` / `evidence_manifest_sha256=1b75d29809de83ff710791f6dee681b67f7795b2b023f3b159760c9129a6a3cb`，16/16 PASS
+- **独立 Review**：`5871139592`（QA bot）+ `5871142025`（reviewer2，承载 `WO-20261112-gate-anchor-fix` 原文）
+- **死锁实测（修复前）**：PR #100 的 head 要求 18 项、artifact 由 main 采集器生成仅 16 项，用其唯一真实 artifact 跑真实门禁 → `omitted mandatory evidence items: ['EVID-35','EVID-36']`；即"新增强制证据项"不可门禁
+- **同一根因的另一方向（活体漏洞）**：head 可缩小 `_LIB` 自行降低验收门槛，无需任何审批
+- **修复后**：同一 PR #100、同一 artifact → `GATE_PR independently QA verified and dual-approved`；随后 PR #100 合并（`6e2cbad`），Library 强制集 16 → 18
+- **裁决认定**：QA 总指挥 FINAL-R3/R4 均裁 `ACCEPTED_AS_GOVERNANCE_HARDENING`，建议作为 G2 宪制强制力输入；原则 = "被审查者可以提出修改规则，但不能自行决定本次审查适用什么规则"
+- **NOT_RUN / 边界**：未改 `qa_collector.py` / `pr_gate.py` / `qa_artifact.py`；未改 `REQUIRED_PROFILE_EVIDENCES` 语义（仅后续 PR #100 生效）；生产/计费 `NOT_AUTHORIZED`
 - **归档时间**：2026-11-12
