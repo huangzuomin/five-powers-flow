@@ -1,0 +1,93 @@
+name: FPF Ledger Claim Trigger
+
+# Read-only front door for the claim job. It may run from any ref, so it holds no
+# write permission; it only serialises the requested recovery binding into an
+# artifact. The privileged claim job consumes it from the default branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorization_id:
+        description: sha256 id of the merged LEDGER_RECOVERY authorization
+        required: true
+        type: string
+      tip_sha:
+        description: Main tip the authorization binds
+        required: true
+        type: string
+      failure_run_id:
+        description: check run id the authorization binds
+        required: true
+        type: string
+      projection_digest:
+        description: sha256 of the projection being recovered
+        required: true
+        type: string
+      task_id:
+        description: FPF task ID whose ledger is recovered
+        required: true
+        type: string
+      project_id:
+        description: FPF project ID
+        required: true
+        default: FPF
+        type: string
+      pr_number:
+        description: Implementation PR the recovery projects
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Emit the untrusted claim request
+        env:
+          AUTHORIZATION_ID: ${{ inputs.authorization_id }}
+          TIP_SHA: ${{ inputs.tip_sha }}
+          FAILURE_RUN_ID: ${{ inputs.failure_run_id }}
+          PROJECTION_DIGEST: ${{ inputs.projection_digest }}
+          TASK_ID: ${{ inputs.task_id }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REQUESTED_BY: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          def need(name: str, pattern: str) -> str:
+              value = os.environ.get(name, "").strip()
+              if not re.fullmatch(pattern, value):
+                  raise SystemExit(f"CLAIM_REQUEST_INVALID:{name}")
+              return value
+
+          payload = {
+              "schema": "fpf-claim-request/v1",
+              "authorization_id": need("AUTHORIZATION_ID", r"PA-[0-9a-f]{64}"),
+              "tip_sha": need("TIP_SHA", r"[0-9a-f]{40}"),
+              "failure_run_id": need("FAILURE_RUN_ID", r"[0-9]+"),
+              "projection_digest": need("PROJECTION_DIGEST", r"[0-9a-f]{64}"),
+              "task_id": need("TASK_ID", r"[A-Z0-9][A-Z0-9-]{2,63}"),
+              "project_id": need("PROJECT_ID", r"[A-Z0-9][A-Z0-9-]{1,31}"),
+              "pr_number": need("PR_NUMBER", r"[0-9]+"),
+              "requested_by": os.environ.get("REQUESTED_BY", ""),
+              "requested_at": __import__("datetime").datetime.now(
+                  __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+          }
+          Path("claim-request.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fpf-claim-request-${{ github.run_id }}
+          path: claim-request.json
+          retention-days: 7

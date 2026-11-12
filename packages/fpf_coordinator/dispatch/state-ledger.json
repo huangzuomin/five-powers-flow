@@ -1,0 +1,20 @@
+{
+  "schema_version": "fpf.state-ledger/v1",
+  "source": {
+    "as_of_event_id": null,
+    "as_of_occurred_at": null,
+    "audit_check_run_id": null,
+    "audit_completed_at": null,
+    "audit_run_id": null,
+    "backend": "github",
+    "complete": true,
+    "event_count": 0,
+    "event_ids": [],
+    "event_log_digest": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "generated_by": "fpf-state-projector/v1",
+    "pending_event_count": 0,
+    "projection_digest": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "repo": "huangzuomin/five-powers-flow"
+  },
+  "tasks": []
+}

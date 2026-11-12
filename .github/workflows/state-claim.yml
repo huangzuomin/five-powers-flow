@@ -1,0 +1,116 @@
+name: FPF Ledger Claim
+
+# D-02/D-03: the only job allowed to hold contents:write for claims.  It runs the
+# trusted main revision of the code, never a pull-request head, and it refuses to
+# create a claim unless it can re-derive the authorization, the failure and the
+# projection itself.  A claim that exists is permanent (D-05).
+#
+# R7-01: a dispatched workflow executes the definition of the ref it runs on, so
+# write permissions may only live behind `workflow_run`, whose definition always
+# comes from the default branch.  The untrusted half is state-claim-trigger.yml.
+
+on:
+  workflow_run:
+    workflows: ["FPF Ledger Claim Trigger"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  claim:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: read
+      checks: read
+      actions: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install pyyaml
+      - name: Verify the trigger identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${TRIGGER_RUN_ID}" \
+            --jq '{path:.path,event:.event,head_sha:.head_sha,actor:.actor.login,triggering_actor:.triggering_actor.login}' > trigger-run.json
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+          facts = json.loads(Path("trigger-run.json").read_text(encoding="utf-8"))
+          if facts.get("path") != ".github/workflows/state-claim-trigger.yml":
+              sys.exit("CLAIM_UPSTREAM_IDENTITY:path")
+          if facts.get("event") != "workflow_dispatch":
+              sys.exit("CLAIM_UPSTREAM_IDENTITY:event")
+          if facts.get("actor") != facts.get("triggering_actor"):
+              sys.exit("CLAIM_UPSTREAM_IDENTITY:actor")
+          PY
+      - name: Download the untrusted claim request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p request
+          gh run download "${TRIGGER_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "fpf-claim-request-${TRIGGER_RUN_ID}" \
+            --dir request
+          test -f request/claim-request.json
+          test "$(wc -c < request/claim-request.json)" -le 4096
+      - name: Re-derive facts and claim the authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BASE_SHA=$(git rev-parse HEAD)
+          echo "claiming against trusted main $BASE_SHA"
+          python - <<'PY' > claim-args.env
+          import json, shlex
+          from pathlib import Path
+          data = json.loads(Path("request/claim-request.json").read_text(encoding="utf-8"))
+          for key in (
+              "authorization_id", "tip_sha", "failure_run_id", "projection_digest",
+              "task_id", "project_id", "pr_number",
+          ):
+              print(f"CLAIM_{key.upper()}={shlex.quote(str(data[key]))}")
+          PY
+          set -a
+          . ./claim-args.env
+          set +a
+          python -m packages.fpf_coordinator.dispatch.claims claim-verified \
+            --repo "${{ github.repository }}" \
+            --base-sha "$BASE_SHA" \
+            --authorization-id "$CLAIM_AUTHORIZATION_ID" \
+            --tip-sha "$CLAIM_TIP_SHA" \
+            --failure-run-id "$CLAIM_FAILURE_RUN_ID" \
+            --projection-digest "$CLAIM_PROJECTION_DIGEST" \
+            --task-id "$CLAIM_TASK_ID" \
+            --project-id "$CLAIM_PROJECT_ID" \
+            --pr-number "$CLAIM_PR_NUMBER" \
+            | tee claim-result.json
+      - name: Retain claim evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpf-ledger-claim-${{ github.run_id }}
+          path: |
+            claim-result.json
+            trigger-run.json
+          if-no-files-found: warn
+          retention-days: 90

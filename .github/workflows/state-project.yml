@@ -1,0 +1,163 @@
+name: FPF State Ledger Project
+
+# Read-only candidate producer (F2 v3 §1). It may run from any ref, therefore it
+# holds no write permission of any kind and can never touch the ledger or open a
+# PR. Publishing is done exclusively by state-project-publish.yml, whose
+# definition always comes from the default branch.
+
+on:
+  push:
+    paths:
+      - "packages/fpf_coordinator/dispatch/**"
+      - ".github/workflows/state-project.yml"
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: FPF task ID
+        required: true
+        type: string
+      project_id:
+        description: FPF project ID
+        required: true
+        default: FPF
+        type: string
+      pr_number:
+        description: Source implementation PR number
+        required: true
+        type: string
+      base_sha:
+        description: Trusted main commit or ref to branch from
+        required: true
+        default: main
+        type: string
+      authorization_ref:
+        description: Human authorization or work-order reference
+        required: true
+        type: string
+      scope_expires_at:
+        description: Expiry of the referenced authorization (ISO-8601 UTC); never defaulted
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fpf-state-ledger-project
+  cancel-in-progress: false
+
+jobs:
+  project:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install projector dependencies
+        run: python -m pip install pyyaml
+      - name: Resolve the task and PR behind a push
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].number')
+          test -n "$PR"
+          TASK=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq .body | python -c "
+          import sys, yaml
+          from packages.fpf_coordinator.coordinator import extract_yaml_block
+          body = sys.stdin.read()
+          text = extract_yaml_block(body, 'POLICY_CHANGE') or extract_yaml_block(body, 'DEV_HANDOFF')
+          print(yaml.safe_load(text)['task_id'])
+          ")
+          echo "FPF_PR_NUMBER=$PR" >> "$GITHUB_ENV"
+          echo "FPF_TASK_ID=$TASK" >> "$GITHUB_ENV"
+      - name: Generate deterministic ledger candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TASK_ID: ${{ inputs.task_id }}
+          INPUT_PROJECT_ID: ${{ inputs.project_id }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          FPF_TASK_ID="${INPUT_TASK_ID:-${FPF_TASK_ID:-FPF2-G4-EVDEMO-01}}"
+          FPF_PROJECT_ID="${INPUT_PROJECT_ID:-${FPF_PROJECT_ID:-FPF}}"
+          FPF_PR_NUMBER="${INPUT_PR_NUMBER:-${FPF_PR_NUMBER:-0}}"
+          python -m packages.fpf_coordinator.dispatch.poller project \
+            --repo "${{ github.repository }}" \
+            --task-id "$FPF_TASK_ID" \
+            --project-id "$FPF_PROJECT_ID" \
+            --pr-number "$FPF_PR_NUMBER" \
+            --out artifact/state-ledger.json \
+            --event-log artifact/event-log.jsonl
+      - name: Write the untrusted candidate manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TASK_ID: ${{ inputs.task_id }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_PROJECT_ID: ${{ inputs.project_id }}
+          INPUT_AUTHORIZATION_REF: ${{ inputs.authorization_ref }}
+          INPUT_SCOPE_EXPIRES_AT: ${{ inputs.scope_expires_at }}
+        run: |
+          set -euo pipefail
+          FPF_TASK_ID="${INPUT_TASK_ID:-${FPF_TASK_ID:-FPF2-G4-EVDEMO-01}}"
+          FPF_PR_NUMBER="${INPUT_PR_NUMBER:-${FPF_PR_NUMBER:-0}}"
+          if [ "$FPF_PR_NUMBER" = "0" ]; then
+            FPF_PR_NUMBER=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].number')
+          fi
+          PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${FPF_PR_NUMBER}")
+          HEAD_SHA=$(printf '%s' "$PR_JSON" | python -c "import json,sys;print(json.load(sys.stdin)['head']['sha'])")
+          BASE_SHA=$(printf '%s' "$PR_JSON" | python -c "import json,sys;print(json.load(sys.stdin)['base']['sha'])")
+          BASE_BLOB=$(gh api "repos/${{ github.repository }}/contents/packages/fpf_coordinator/dispatch/state-ledger.json?ref=main" --jq .sha)
+          python - "$FPF_TASK_ID" "$HEAD_SHA" "$BASE_SHA" "$BASE_BLOB" "$FPF_PR_NUMBER" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          task_id, head, base, blob, pr_number = sys.argv[1:6]
+          ledger_bytes = Path("artifact/state-ledger.json").read_bytes()
+          ledger = json.loads(ledger_bytes)
+          events = [json.loads(line) for line in Path("artifact/event-log.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+          def canon(value):
+              return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+          manifest = {
+              "manifest_version": 1,
+              "task_id": task_id,
+              "project_id": __import__("os").environ.get("INPUT_PROJECT_ID", "FPF"),
+              "pr_number": int(pr_number),
+              "tested_sha": head,
+              "base_sha": base,
+              "base_blob_sha": blob,
+              "projection_digest": ledger["source"]["projection_digest"],
+              "event_log_digest": ledger["source"]["event_log_digest"],
+              "sha256": {
+                  "state-ledger.json": hashlib.sha256(canon(ledger)).hexdigest(),
+                  "event-log.jsonl": hashlib.sha256(canon(events)).hexdigest(),
+              },
+              "authorization_ref": __import__("os").environ.get("INPUT_AUTHORIZATION_REF", ""),
+              "scope_expires_at": __import__("os").environ.get("INPUT_SCOPE_EXPIRES_AT", ""),
+          }
+          Path("artifact/manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps({"manifest": "artifact/manifest.json", "tested_sha": head}, sort_keys=True))
+          PY
+      - name: Retain the untrusted candidate artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpf-state-candidate-${{ github.run_id }}
+          path: |
+            artifact/manifest.json
+            artifact/state-ledger.json
+            artifact/event-log.jsonl
+          if-no-files-found: warn
+          retention-days: 30

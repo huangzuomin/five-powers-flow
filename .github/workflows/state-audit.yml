@@ -1,0 +1,62 @@
+name: FPF State Ledger Audit
+
+# The only job allowed to write the authoritative audit check (F2 v3 §3).
+# `schedule` is the only trigger that always runs the default-branch definition,
+# so there is no dispatch entry point to impersonate (R7-02).
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions: {}
+
+concurrency:
+  group: fpf-state-ledger-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      checks: write
+      actions: read
+      issues: read
+      pull-requests: read
+    env:
+      FPF_TASK_ID: FPF2-G4-EVDEMO-01
+      FPF_PROJECT_ID: FPF
+    steps:
+      - name: Checkout the trusted audit definition
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install projector dependencies
+        run: python -m pip install pyyaml
+      - name: Reconcile the committed ledger against GitHub facts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m packages.fpf_coordinator.dispatch.poller reconcile \
+            --repo "${GITHUB_REPOSITORY}" \
+            --task-id "${FPF_TASK_ID}" \
+            --project-id "${FPF_PROJECT_ID}" \
+            --pr-number 0 \
+            --ledger packages/fpf_coordinator/dispatch/state-ledger.json \
+            --check-name fpf-state-ledger-audit \
+            --report "reconciliation-${GITHUB_RUN_ID}.json"
+      - name: Retain the audit reconciliation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpf-state-audit-${{ github.run_id }}
+          path: reconciliation-*.json
+          if-no-files-found: warn
+          retention-days: 90
