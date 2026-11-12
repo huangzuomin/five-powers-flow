@@ -216,6 +216,7 @@ def command_reconcile(args: argparse.Namespace) -> int:
                 head_sha=tip,
                 conclusion="success" if result["status"] == "PASS" else "failure",
                 summary=summary,
+                check_name=args.check_name,
             )
             print(json.dumps({"audit_check_run_id": check.get("id")}, ensure_ascii=False))
         except GitHubSourceError as exc:
@@ -246,6 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--ledger", default=str(LEDGER_PATH))
     reconcile.add_argument("--report")
     reconcile.add_argument("--max-audit-age-seconds", type=int, default=1800)
+    reconcile.add_argument(
+        "--check-name", default="fpf-state-ledger-audit",
+        help="a pre-merge trial must use the -trial suffix, never the authoritative name",
+    )
     reconcile.add_argument("--no-check-run", action="store_true")
     reconcile.set_defaults(func=command_reconcile)
     return parser

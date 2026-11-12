@@ -20,6 +20,11 @@ on:
         required: true
         default: "0"
         type: string
+      source_ref:
+        description: Commit to replay from; main is authoritative, anything else is a labelled trial
+        required: true
+        default: main
+        type: string
 
 permissions:
   contents: read
@@ -37,10 +42,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout trusted main
+      - name: Checkout replay source
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ inputs.source_ref || 'main' }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -54,14 +59,21 @@ jobs:
           FPF_TASK_ID: ${{ inputs.task_id || 'FPF2-G4-EVDEMO-01' }}
           FPF_PROJECT_ID: ${{ inputs.project_id || 'FPF' }}
           FPF_PR_NUMBER: ${{ inputs.pr_number || '0' }}
+          FPF_SOURCE_REF: ${{ inputs.source_ref || 'main' }}
         run: |
           set -euo pipefail
+          if [ "$FPF_SOURCE_REF" = "main" ]; then
+            CHECK_NAME="fpf-state-ledger-audit"
+          else
+            CHECK_NAME="fpf-state-ledger-audit-trial"
+          fi
           python -m packages.fpf_coordinator.dispatch.poller reconcile \
             --repo "${{ github.repository }}" \
             --task-id "$FPF_TASK_ID" \
             --project-id "$FPF_PROJECT_ID" \
             --pr-number "$FPF_PR_NUMBER" \
             --ledger packages/fpf_coordinator/dispatch/state-ledger.json \
+            --check-name "$CHECK_NAME" \
             --report "reconciliation-${GITHUB_RUN_ID}.json"
       - name: Retain reconciliation evidence
         if: always()
