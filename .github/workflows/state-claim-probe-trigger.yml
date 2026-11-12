@@ -34,7 +34,7 @@ jobs:
           PROBE_ID: ${{ inputs.probe_id }}
           ATTEMPTS: ${{ inputs.attempts }}
           WINDOW: ${{ inputs.window_seconds }}
-        run: python tools/probe_request.py --out probe-request.json
+        run: python -m packages.fpf_coordinator.dispatch.probe_request --out probe-request.json
       - uses: actions/upload-artifact@v4
         with:
           name: fpf-probe-request-${{ github.run_id }}
