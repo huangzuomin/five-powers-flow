@@ -20,8 +20,8 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from _h2_support import add_worktree, git, init_repo, make_reclaimable
 
-from packages.fpf_coordinator.worktree import (conditions, gitops, lock as lock_mod,
-                                               policy, reclaim)
+from packages.fpf_coordinator.worktree import (arbiter, conditions, gitops,
+                                               lock as lock_mod, policy, reclaim)
 from packages.fpf_coordinator.worktree.noreplace import DestinationExists
 
 
@@ -444,3 +444,45 @@ def test_stale_origin_main_never_proves_merged(tmp_path):
         path, repo=repo, root=repo / "_worktrees", main_worktree=repo,
         policy=policy.load(repo), grace_days=0)
     assert conditions.NOT_MERGED in verdict.reason_codes
+
+
+def test_break_lock_denied_while_claim_holds_arbiter(tmp_path):
+    """R11 scenario A: an unarchived CLAIM outranks a REVOKE."""
+    common = tmp_path / "common"
+    held = _lock(common, "run-a")
+    stat = held.path.stat()
+    claim = arbiter.build_record(arbiter.CLAIM, "run-a", stat.st_dev,
+                                 stat.st_ino, os.getpid(),
+                                 "2026-01-01T00:00:00Z")
+    assert arbiter.acquire(common, claim).won
+    with pytest.raises(lock_mod.LockError) as excinfo:
+        lock_mod.break_lock(
+            common, expected_dev=stat.st_dev, expected_ino=stat.st_ino,
+            by="operator", reason="test", liveness=lambda *a: "DEAD",
+            arbiter_root=common)
+    assert excinfo.value.reason == lock_mod.BREAK_LOCK_ARBITER_DENIED
+    assert (common / lock_mod.LOCK_NAME).exists()
+    assert arbiter.read_arbiter(common)["decision"] == arbiter.CLAIM
+
+
+def test_break_lock_archives_its_revoke_record(tmp_path):
+    """A winning revocation archives the name instead of leaving it held."""
+    common = tmp_path / "common"
+    held = _lock(common, "run-a")
+    stat = held.path.stat()
+    proof = lock_mod.break_lock(
+        common, expected_dev=stat.st_dev, expected_ino=stat.st_ino,
+        by="operator", reason="holder terminated", liveness=lambda *a: "DEAD",
+        arbiter_root=common)
+    assert proof["liveness"] == "DEAD"
+    assert (common / "lifecycle.arbiter.revoked.run-a").is_file()
+    assert not (common / arbiter.ARBITER_NAME).exists()
+    assert not (common / lock_mod.LOCK_NAME).exists()
+
+
+def test_revoke_cli_is_reachable(tmp_path):
+    """The revocation surface must exist in the shipped CLI, not only in libs."""
+    from packages.fpf_runtime import worktree_lifecycle as cli
+    args = cli.build_parser().parse_args(
+        ["revoke", "--repo", str(tmp_path), "--reason", "holder terminated"])
+    assert args.func is cli.cmd_revoke

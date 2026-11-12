@@ -30,6 +30,7 @@ ARBITER_VERSION = "fpf.lifecycle-arbiter/v1"
 
 CLAIM = "CLAIM"
 REVOKE = "REVOKE"
+ABORTED = "aborted"
 
 
 class ArbiterError(RuntimeError):
@@ -38,6 +39,10 @@ class ArbiterError(RuntimeError):
 
 class ArbiterUnreadable(ArbiterError):
     """The winning record is missing, truncated, or fails its digest."""
+
+
+class OrphanResolutionRefused(ArbiterError):
+    """An orphan arbiter may only be retired by an explicit, proven decision."""
 
 
 @dataclass(frozen=True)
@@ -123,9 +128,9 @@ def acquire(root: os.PathLike[str] | str, record: dict) -> Outcome:
         try:
             holder = read_arbiter(base)
         except ArbiterUnreadable:
-            _retire(base, candidate, record, "lost")
+            _retire(base, candidate, record, ABORTED)
             return Outcome(False, None, None, "ARBITER_UNREADABLE")
-        _retire(base, candidate, record, "lost")
+        _retire(base, candidate, record, ABORTED)
         return Outcome(False, holder["decision"], holder["run_id"],
                        "held_by_other")
 
@@ -143,4 +148,37 @@ def release(root: os.PathLike[str] | str, record: dict, tag: str) -> Path:
     suffix = f"{ARBITER_NAME}.{tag}.{record['run_id']}"
     target = base / suffix
     rename_noreplace(base / ARBITER_NAME, target)
+    return target
+
+
+def resolve_orphan(root: os.PathLike[str] | str, *, expected_sha256: str,
+                   reason: str, by: str) -> Path:
+    """Retire an arbiter name left behind by a crashed holder.
+
+    Fail-closed by construction: the caller must quote the digest of the
+    record it inspected, and give both a reason and an operator.  The record
+    is *archived*, never deleted, and a receipt is written beside it.
+    """
+    base = Path(root)
+    record = read_arbiter(base)  # raises ArbiterUnreadable on missing/corrupt
+    if str(expected_sha256).lower() != str(record["content_sha256"]).lower():
+        raise OrphanResolutionRefused("ORPHAN_RESOLUTION_DIGEST_MISMATCH")
+    if not str(reason).strip() or not str(by).strip():
+        raise OrphanResolutionRefused("ORPHAN_RESOLUTION_PROOF_REQUIRED")
+    target = base / f"{ARBITER_NAME}.orphan.{record['run_id']}"
+    rename_noreplace(base / ARBITER_NAME, target)
+    receipt = base / f"{target.name}.resolution.json"
+    if not receipt.exists():
+        body = {
+            "arbiter_record_sha256": record["content_sha256"],
+            "archived_as": target.name,
+            "reason": str(reason),
+            "by": str(by),
+            "resolved_at": _now(),
+        }
+        with open(receipt, "xb") as handle:
+            handle.write(json.dumps(body, sort_keys=True, indent=2,
+                                    ensure_ascii=False).encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
     return target

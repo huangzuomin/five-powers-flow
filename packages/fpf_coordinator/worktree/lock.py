@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import arbiter as arbiter_mod
 from .noreplace import DestinationExists, NoReplaceUnsupported, rename_noreplace
 
 LOCK_NAME = "lifecycle.lock"
@@ -37,6 +38,7 @@ BREAK_LOCK_IDENTITY_MISMATCH = "BREAK_LOCK_IDENTITY_MISMATCH"
 BREAK_LOCK_HOLDER_ALIVE = "BREAK_LOCK_HOLDER_ALIVE"
 BREAK_LOCK_LIVENESS_UNVERIFIABLE = "BREAK_LOCK_LIVENESS_UNVERIFIABLE"
 BREAK_LOCK_REMOVE_IN_FLIGHT = "BREAK_LOCK_REMOVE_IN_FLIGHT"
+BREAK_LOCK_ARBITER_DENIED = "BREAK_LOCK_ARBITER_DENIED"
 ORPHAN_CLAIM = "ORPHAN_CLAIM"
 
 
@@ -196,6 +198,17 @@ def _default_start_time(pid: int) -> str | None:
     return fields[19] if len(fields) > 19 else None
 
 
+def start_time_for(pid: int) -> str:
+    """The process start time recorded in the lock.
+
+    Never substitute a wall-clock timestamp: doing so makes every live holder
+    look dead to ``pid_liveness`` and turns break-lock into a delete-anytime
+    primitive.  ``""`` means "cannot tell" and stays fail-closed downstream.
+    """
+    value = _default_start_time(int(pid))
+    return str(value) if value else ""
+
+
 def pid_liveness(pid: int, process_start_time: str, probe=None) -> str:
     """``ALIVE`` / ``DEAD`` / ``UNVERIFIABLE``.
 
@@ -203,6 +216,8 @@ def pid_liveness(pid: int, process_start_time: str, probe=None) -> str:
     process that took the lock is gone, so the answer is DEAD, not ALIVE.
     """
     if not pid or pid <= 0:
+        return "UNVERIFIABLE"
+    if not str(process_start_time).strip():
         return "UNVERIFIABLE"
     try:
         current = probe(pid) if probe else _default_start_time(pid)
@@ -249,7 +264,7 @@ def remove_in_flight(common_dir, run_id: str | None = None) -> list[Path]:
 
 def break_lock(common_dir, *, expected_dev: int, expected_ino: int, by: str,
                reason: str, liveness, stale_after_seconds: int = 300,
-               assume_dead: bool = False) -> dict:
+               assume_dead: bool = False, arbiter_root=None) -> dict:
     """Revoke a lock, but only when the holder is provably not running.
 
     ``liveness(pid, process_start_time)`` returns ``ALIVE``, ``DEAD`` or
@@ -284,12 +299,29 @@ def break_lock(common_dir, *, expected_dev: int, expected_ino: int, by: str,
     if verdict == "UNVERIFIABLE" and assume_dead:
         proof["override"] = "assume_dead"
 
+    revoked = None
+    if arbiter_root is not None:
+        # A revocation competes with a delete claim for one name; the loser
+        # must not act, so this happens strictly before the lock is renamed.
+        revoked = arbiter_mod.build_record(
+            arbiter_mod.REVOKE, run_id, int(expected_dev), int(expected_ino),
+            os.getpid(), _default_start_time(os.getpid()) or "")
+        outcome = arbiter_mod.acquire(arbiter_root, revoked)
+        if not outcome.won:
+            raise LockError(
+                BREAK_LOCK_ARBITER_DENIED,
+                f"{outcome.decision_seen}:{outcome.run_id_seen}:{outcome.reason}")
+
     target = base / f"{LOCK_NAME}.break.{_stamp()}.{run_id}"
     try:
         rename_noreplace(base / LOCK_NAME, target)
     except NoReplaceUnsupported as exc:
+        if revoked is not None:
+            arbiter_mod.release(arbiter_root, revoked, arbiter_mod.ABORTED)
         raise LockError("RENAME_NOREPLACE_UNSUPPORTED", str(exc)) from exc
     except DestinationExists as exc:
+        if revoked is not None:
+            arbiter_mod.release(arbiter_root, revoked, arbiter_mod.ABORTED)
         raise LockError(LOCK_RELEASE_NAME_COLLISION, str(exc)) from exc
     proof.update({
         "by": by,
@@ -299,6 +331,8 @@ def break_lock(common_dir, *, expected_dev: int, expected_ino: int, by: str,
     })
     (base / f"{target.name}.proof.json").write_text(
         json.dumps(proof, sort_keys=True, indent=2), encoding="utf-8")
+    if revoked is not None:
+        arbiter_mod.release(arbiter_root, revoked, "revoked")
     return proof
 
 

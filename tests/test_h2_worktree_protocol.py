@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
+import textwrap
 import threading
 from pathlib import Path
 
@@ -23,7 +25,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from packages.fpf_coordinator.worktree import arbiter, audit, identity  # noqa: E402
+from packages.fpf_coordinator.worktree import (  # noqa: E402
+    arbiter,
+    audit,
+    identity,
+    lock as lock_mod,
+)
 from packages.fpf_coordinator.worktree.noreplace import (  # noqa: E402
     DestinationExists,
     rename_noreplace,
@@ -59,19 +66,32 @@ def test_arbiter_claim_and_revoke_scenario_a_arbiter_held(tmp_path):
     assert outcome.won is False
     assert outcome.decision_seen == arbiter.REVOKE
     assert outcome.reason == "held_by_other"
+    # The loser archives its own candidate and never removes the winner's.
+    aborted = tmp_path / "lifecycle.arbiter.candidate.CLAIM.run-a.aborted"
+    assert aborted.is_file()
+    assert (tmp_path / arbiter.ARBITER_NAME).is_file()
 
 
 def test_arbiter_claim_late_after_arbiter_released(tmp_path):
     expected = _write_lock(tmp_path, "run-a")
     revoke = _record(arbiter.REVOKE, "run-a")
     assert arbiter.acquire(tmp_path, revoke).won
-    rename_noreplace(tmp_path / identity.LOCK_NAME,
-                     tmp_path / "lifecycle.lock.revoked.20260101T000000Z.run-a")
+    revoked_lock = tmp_path / "lifecycle.lock.revoked.20260101T000000Z.run-a"
+    rename_noreplace(tmp_path / identity.LOCK_NAME, revoked_lock)
     arbiter.release(tmp_path, revoke, "revoked")
+    revoked_bytes = revoked_lock.read_bytes()
+    revoked_arbiter = tmp_path / "lifecycle.arbiter.revoked.run-a"
+    arbiter_bytes = revoked_arbiter.read_bytes()
 
-    outcome = arbiter.acquire(tmp_path, _record(arbiter.CLAIM, "run-a"))
+    claim = _record(arbiter.CLAIM, "run-a")
+    outcome = arbiter.acquire(tmp_path, claim)
     assert outcome.won is True
     assert identity.verify(tmp_path, expected) == identity.LOCK_LOST
+    # The revoked facts are untouched, and the void claim is archived.
+    assert revoked_lock.read_bytes() == revoked_bytes
+    assert revoked_arbiter.read_bytes() == arbiter_bytes
+    assert arbiter.release(tmp_path, claim, arbiter.ABORTED).name == \
+        "lifecycle.arbiter.aborted.run-a"
     removals = []
     if identity.verify(tmp_path, expected) == identity.AUTHORIZED:
         removals.append("removed")
@@ -82,8 +102,46 @@ def test_arbiter_claim_late_after_new_lock_exists(tmp_path):
     expected = _write_lock(tmp_path, "run-a")
     (tmp_path / identity.LOCK_NAME).unlink()
     _write_lock(tmp_path, "run-new")
-    assert arbiter.acquire(tmp_path, _record(arbiter.CLAIM, "run-a")).won is True
+    heartbeat = tmp_path / "lifecycle.lock.hb.run-new"
+    heartbeat.write_bytes(b'{"seq":0}')
+    lock_bytes = (tmp_path / identity.LOCK_NAME).read_bytes()
+
+    claim = _record(arbiter.CLAIM, "run-a")
+    assert arbiter.acquire(tmp_path, claim).won is True
     assert identity.verify(tmp_path, expected) == identity.LOCK_LOST
+    archived = arbiter.release(tmp_path, claim, arbiter.ABORTED)
+    assert archived.name == "lifecycle.arbiter.aborted.run-a"
+    # No removal was issued, and the new pair is byte-identical.
+    assert (tmp_path / identity.LOCK_NAME).read_bytes() == lock_bytes
+    assert heartbeat.read_bytes() == b'{"seq":0}'
+
+
+def test_orphan_arbiter_requires_explicit_resolution(tmp_path):
+    record = _record(arbiter.CLAIM, "run-dead")
+    assert arbiter.acquire(tmp_path, record).won
+    with pytest.raises(arbiter.OrphanResolutionRefused):
+        arbiter.resolve_orphan(tmp_path, expected_sha256="0" * 64,
+                               reason="holder crashed", by="operator")
+    with pytest.raises(arbiter.OrphanResolutionRefused):
+        arbiter.resolve_orphan(tmp_path,
+                               expected_sha256=record["content_sha256"],
+                               reason="", by="operator")
+    archived = arbiter.resolve_orphan(
+        tmp_path, expected_sha256=record["content_sha256"],
+        reason="holder crashed", by="operator")
+    assert archived.name == "lifecycle.arbiter.orphan.run-dead"
+    assert archived.is_file()
+    assert (tmp_path / (archived.name + ".resolution.json")).is_file()
+    assert not (tmp_path / arbiter.ARBITER_NAME).exists()
+    assert arbiter.acquire(tmp_path, _record(arbiter.REVOKE, "run-c")).won
+
+
+def test_orphan_resolution_refuses_unreadable_record(tmp_path):
+    (tmp_path / arbiter.ARBITER_NAME).write_bytes(b"{nope")
+    with pytest.raises(arbiter.ArbiterUnreadable):
+        arbiter.resolve_orphan(tmp_path, expected_sha256="0" * 64,
+                               reason="holder crashed", by="operator")
+    assert (tmp_path / arbiter.ARBITER_NAME).read_bytes() == b"{nope"
 
 
 def test_arbiter_concurrent_acquire_exactly_one_winner(tmp_path):
@@ -159,3 +217,61 @@ def test_release_state_is_derived_from_disk(tmp_path):
         tmp_path / "lifecycle.lock.hb.released.20260101T000000Z.run-a")
     assert (audit.reconcile_release_state(tmp_path, "run-a")
             == audit.LOCK_AND_HEARTBEAT_ARCHIVED_RECEIPT_PENDING)
+
+
+def test_three_phase_failure_injection(tmp_path):
+    receipt = audit.write_stage_one(tmp_path, {"run_id": "run-a"}, "run-a")
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_bytes(audit_path.read_bytes() + b" ")
+    released = tmp_path / "lock.released"
+    heartbeat = tmp_path / "hb.released"
+    released.write_bytes(b"lock-bytes")
+    heartbeat.write_bytes(b"hb-bytes")
+    with pytest.raises(audit.AuditChainBroken):
+        audit.write_stage_two(tmp_path, receipt, released, heartbeat,
+                              removal_done=True,
+                              lock_state=audit.LOCK_STILL_HELD)
+    assert not (tmp_path / "lock-release.json").exists()
+
+    (tmp_path / identity.LOCK_NAME).write_text("{}", encoding="utf-8")
+    assert audit.reconcile_release_state(tmp_path, "run-a") == audit.LOCK_STILL_HELD
+    (tmp_path / identity.LOCK_NAME).rename(
+        tmp_path / "lifecycle.lock.released.20260101T000000Z.run-a")
+    (tmp_path / "lifecycle.lock.hb.run-a").write_text("{}", encoding="utf-8")
+    assert (audit.reconcile_release_state(tmp_path, "run-a")
+            == audit.LOCK_ARCHIVED_HEARTBEAT_PENDING)
+    (tmp_path / "lifecycle.lock.hb.run-a").rename(
+        tmp_path / "lifecycle.lock.hb.released.20260101T000000Z.run-a")
+    assert (audit.reconcile_release_state(tmp_path, "run-a")
+            == audit.LOCK_AND_HEARTBEAT_ARCHIVED_RECEIPT_PENDING)
+
+
+def test_crash_recovery_after_kill(tmp_path):
+    script = tmp_path / "crash_reclaimer.py"
+    script.write_text(textwrap.dedent(
+        """
+        import os, sys
+        from pathlib import Path
+        sys.path.insert(0, sys.argv[1])
+        from packages.fpf_coordinator.worktree import lock
+
+        common = Path(sys.argv[2])
+        held = lock.acquire(common, "run-crash", pid=os.getpid(),
+                            process_start_time=lock.start_time_for(os.getpid()))
+        held.path.rename(
+            common / "lifecycle.lock.released.20260101T000000Z.run-crash")
+        os._exit(9)
+        """
+    ), encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, str(script), str(ROOT), str(tmp_path)],
+        capture_output=True, text=True)
+    assert completed.returncode == 9, completed.stderr
+    # The crash is recovered from disk facts, not from a call-progress flag.
+    assert (audit.reconcile_release_state(tmp_path, "run-crash")
+            == audit.LOCK_ARCHIVED_HEARTBEAT_PENDING)
+    assert "run-crash" in lock_mod.orphan_heartbeats(tmp_path)
+    # The name is free again and the orphaned heartbeat is not adopted.
+    fresh = lock_mod.acquire(tmp_path, "run-next", pid=999,
+                             process_start_time="2026-01-01T00:00:00Z")
+    assert fresh.run_id == "run-next"

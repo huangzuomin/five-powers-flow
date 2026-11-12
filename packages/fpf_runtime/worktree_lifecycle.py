@@ -13,7 +13,9 @@ import sys
 from pathlib import Path
 
 from packages.fpf_coordinator.worktree import (
+    arbiter as arbiter_mod,
     gitops,
+    lock as lock_mod,
     marker as marker_mod,
     policy as policy_mod,
     promotion,
@@ -118,6 +120,32 @@ def cmd_reclaim(args) -> int:
     return EXIT_OK
 
 
+def cmd_revoke(args) -> int:
+    """Operator revocation.  Competes for the arbiter name before acting."""
+    repo = _repo(args.repo)
+    common = repo / ".git"
+    try:
+        if args.resolve_orphan:
+            archived = arbiter_mod.resolve_orphan(
+                common, expected_sha256=args.expected_sha,
+                reason=args.reason, by=args.by)
+            print(json.dumps({"orphan_archived": archived.name}))
+            return EXIT_OK
+        stat = (common / lock_mod.LOCK_NAME).stat()
+        proof = lock_mod.break_lock(
+            common, expected_dev=stat.st_dev, expected_ino=stat.st_ino,
+            by=args.by, reason=args.reason, liveness=lock_mod.pid_liveness,
+            assume_dead=args.assume_dead, arbiter_root=common)
+    except FileNotFoundError:
+        print("LOCK_LOST: no lock at this identity", file=sys.stderr)
+        return EXIT_HOLD
+    except (lock_mod.LockError, arbiter_mod.ArbiterError) as exc:
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_HOLD
+    print(json.dumps(proof, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="worktree_lifecycle")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -153,6 +181,15 @@ def build_parser() -> argparse.ArgumentParser:
     reclaim_cmd.add_argument("--archive-root")
     reclaim_cmd.add_argument("--run-id", default="local")
     reclaim_cmd.set_defaults(func=cmd_reclaim)
+
+    revoke = sub.add_parser("revoke")
+    revoke.add_argument("--repo", default=".")
+    revoke.add_argument("--reason", required=True)
+    revoke.add_argument("--by", default="operator")
+    revoke.add_argument("--assume-dead", action="store_true")
+    revoke.add_argument("--resolve-orphan", action="store_true")
+    revoke.add_argument("--expected-sha", default="")
+    revoke.set_defaults(func=cmd_revoke)
     return parser
 
 

@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import conditions, gitops, lock as lock_mod, marker as marker_mod, policy as policy_mod
+from . import (arbiter as arbiter_mod, conditions, gitops, lock as lock_mod,
+               marker as marker_mod, policy as policy_mod)
+from .noreplace import DestinationExists
 
 TOOL_VERSION = "fpf-worktree/v1"
 
@@ -37,6 +39,7 @@ REMOVE_REFUSED = "REMOVE_REFUSED"
 BRANCH_IN_USE = "BRANCH_IN_USE"
 BRANCH_DELETE_REFUSED = "BRANCH_DELETE_REFUSED"
 DETACHED_NO_BRANCH = "DETACHED_NO_BRANCH"
+ARBITER_HELD_BY_OTHER = "ARBITER_HELD_BY_OTHER"
 
 
 def _now() -> str:
@@ -292,47 +295,70 @@ def reclaim_one(verdict, *, repo, policy, archive_root, run_id: str,
         hook()
 
     lock = None
+    claim = None
     try:
         lock = lock_mod.acquire(
             Path(repo) / ".git", f"{run_id}-{verdict.name}",
-            pid=os.getpid(), process_start_time=_now())
+            pid=os.getpid(),
+            process_start_time=lock_mod.start_time_for(os.getpid()))
     except lock_mod.LockError as exc:
         return hold(exc.reason)
 
     try:
+        claim = arbiter_mod.build_record(
+            arbiter_mod.CLAIM, lock.run_id, lock.dev, lock.ino, lock.pid,
+            lock.process_start_time, targets=[str(target)])
+        outcome = arbiter_mod.acquire(lock.common_dir, claim)
+        if not outcome.won:
+            result.entry["arbiter"] = {
+                "decision": outcome.decision_seen,
+                "run_id": outcome.run_id_seen,
+                "reason": outcome.reason,
+            }
+            claim = None
+            return hold(ARBITER_HELD_BY_OTHER)
+
+        def abort_claim(*codes) -> ReclaimResult:
+            """A claim that cannot act must free the name, never keep it."""
+            try:
+                arbiter_mod.release(lock.common_dir, claim, arbiter_mod.ABORTED)
+            except (DestinationExists, FileNotFoundError):
+                pass
+            return hold(*codes)
+
         final = conditions.evaluate(
             target, repo=repo, root=Path(repo) / policy.worktree_root,
             main_worktree=repo, policy=policy, api=api, now=now,
             grace_days=grace_days)
         if final.head_sha != head_at_plan:
-            return hold(TARGET_IDENTITY_CHANGED)
+            return abort_claim(TARGET_IDENTITY_CHANGED)
         if not final.ok and final.reason_codes not in (
                 [conditions.NOT_PROMOTED], [conditions.IN_GRACE]):
-            return hold(FINAL_REVALIDATION_FAILED, *final.reason_codes)
+            return abort_claim(FINAL_REVALIDATION_FAILED, *final.reason_codes)
         hook = hooks.get("before_final_c1")
         if hook:
             hook()
         if _leftovers(target, policy):
-            return hold(FINAL_C1_DIRTY)
+            return abort_claim(FINAL_C1_DIRTY)
         if lock_mod.reverify(lock) != lock_mod.LOCK_OK:
-            return hold(lock_mod.LOCK_OWNERSHIP_REVOKED)
+            return abort_claim(lock_mod.LOCK_OWNERSHIP_REVOKED)
         if (lock.path.stat().st_dev, lock.path.stat().st_ino) != (lock.dev, lock.ino):
-            return hold(TARGET_IDENTITY_CHANGED)
+            return abort_claim(TARGET_IDENTITY_CHANGED)
         try:
             lock_mod.begin_consuming(lock)
         except lock_mod.LockError as exc:
-            return hold(exc.reason)
+            return abort_claim(exc.reason)
 
         hook = hooks.get("before_remove")
         if hook:
             hook()
         if lock_mod.reverify(lock) != lock_mod.LOCK_OK:
-            return hold(lock_mod.LOCK_OWNERSHIP_REVOKED)
+            return abort_claim(lock_mod.LOCK_OWNERSHIP_REVOKED)
 
         removal = gitops.remove_worktree(repo, target)
         result.entry["git_ops"] = {"worktree_remove_exit": removal.exit}
         if removal.exit != 0:
-            return hold(REMOVE_REFUSED)
+            return abort_claim(REMOVE_REFUSED)
         result.removed = True
 
         result.reason_codes = _dispose_branch(repo, live.branch, result.entry)
@@ -354,6 +380,13 @@ def reclaim_one(verdict, *, repo, policy, archive_root, run_id: str,
         result.decision = RECLAIMED
         return result
     finally:
+        if claim is not None:
+            tag = ("done" if result.decision == RECLAIMED
+                   else arbiter_mod.ABORTED)
+            try:
+                arbiter_mod.release(lock.common_dir, claim, tag)
+            except (DestinationExists, FileNotFoundError):
+                pass
         if lock is not None and result.decision != RECLAIMED:
             try:
                 lock_mod.release(lock, audit={})
