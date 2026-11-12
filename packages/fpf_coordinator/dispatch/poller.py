@@ -20,7 +20,7 @@ from .github_source import (
     latest_audit_status,
     main_tip,
 )
-from .reconcile import reconcile_projection, write_report
+from .reconcile import audit_is_fresh, reconcile_projection, write_report
 from .reducer import Reduction, projection_tasks_digest, reduce_events
 
 
@@ -104,6 +104,20 @@ def write_ledger(path: Path, ledger: Mapping[str, Any]) -> None:
     )
 
 
+def ledger_has_content(path: Path) -> bool:
+    """A ledger that already carries events must be refreshed by an audit first."""
+    try:
+        if not path.is_file():
+            return False
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(value, dict):
+        return False
+    source = value.get("source")
+    return bool(isinstance(source, Mapping) and source.get("event_ids"))
+
+
 def _token(name: str) -> str:
     return os.environ.get(name, "")
 
@@ -140,6 +154,12 @@ def command_genesis(args: argparse.Namespace) -> int:
 def command_project(args: argparse.Namespace) -> int:
     reduction, token = _reduce_from_github(args)
     audit = latest_audit_status(args.repo, token)
+    if ledger_has_content(Path(args.out)):
+        fresh, reason = audit_is_fresh(
+            audit, max_age_seconds=args.max_audit_age_seconds,
+        )
+        if not fresh:
+            raise ValueError(f"projection requires a fresh passing audit: {reason}")
     ledger = ledger_from_reduction(reduction, args.repo, audit)
     write_ledger(Path(args.out), ledger)
     if args.event_log:
@@ -170,7 +190,7 @@ def command_reconcile(args: argparse.Namespace) -> int:
         ledger,
         audit=audit,
         max_audit_age_seconds=args.max_audit_age_seconds,
-        allow_genesis_bootstrap=True,
+        require_fresh_audit=False,
     )
     tip = main_tip(args.repo, token)
     summary = json.dumps({
@@ -218,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(project)
     project.add_argument("--out", default=str(LEDGER_PATH))
     project.add_argument("--event-log")
+    project.add_argument("--max-audit-age-seconds", type=int, default=1800)
     project.set_defaults(func=command_project)
 
     reconcile = sub.add_parser("reconcile", help="independently replay and compare the ledger")

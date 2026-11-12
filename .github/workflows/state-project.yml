@@ -25,6 +25,10 @@ on:
         description: Human authorization or work-order reference
         required: true
         type: string
+      scope_expires_at:
+        description: Expiry of the referenced authorization (ISO-8601 UTC); never defaulted
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -105,7 +109,7 @@ jobs:
           authorization_ref: "${{ inputs.authorization_ref }}"
           authorized_by: "project-owner"
           scope_grant_id: "gr-${{ inputs.pr_number }}-${BASE_SHA:0:12}"
-          scope_expires_at: "2030-01-01T00:00:00Z"
+          scope_expires_at: "${{ inputs.scope_expires_at }}"
           \`\`\`
           EOF
           gh pr create \

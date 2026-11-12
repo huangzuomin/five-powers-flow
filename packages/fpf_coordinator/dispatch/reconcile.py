@@ -83,6 +83,43 @@ def _audit_is_fresh(
     return True, ""
 
 
+def audit_is_fresh(
+    audit: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    max_age_seconds: int = 1800,
+) -> tuple[bool, str]:
+    """Consumer-facing freshness verdict for a committed ledger's audit."""
+    return _audit_is_fresh(
+        audit,
+        now=now or datetime.now(timezone.utc),
+        max_age_seconds=max_age_seconds,
+    )
+
+
+def _audit_blocks_replay(audit: Mapping[str, Any] | None) -> tuple[bool, str]:
+    """Gate the auditor on its own prior output, without self-deadlock.
+
+    The audit check is produced by the reconciliation run itself, so a missing
+    check on a fresh ``main`` tip (or a check that has aged out) must not block
+    the run that would create it: the run recomputes the projection from
+    authoritative GitHub facts and its verdict becomes the new audit.  Only a
+    recorded failure on the current tip is sticky, because a failed audit is
+    evidence about this exact ledger and must never be masked by re-running.
+    """
+    if not audit or not audit.get("exists"):
+        return False, ""
+    if str(audit.get("latest_conclusion") or "").lower() != "success":
+        return True, "AUDIT_LATEST_RUN_NOT_SUCCESS"
+    if not audit.get("latest_head_sha") or not audit.get("main_tip_sha"):
+        return True, "AUDIT_HEAD_SHA_MISSING"
+    if str(audit.get("latest_head_sha")).lower() != str(audit.get("main_tip_sha")).lower():
+        return True, "AUDIT_HEAD_NOT_MAIN"
+    if audit.get("latest_head_on_main") is False:
+        return True, "AUDIT_HEAD_NOT_ON_MAIN"
+    return False, ""
+
+
 def reconcile_projection(
     reduction: Reduction,
     ledger: Mapping[str, Any],
@@ -90,13 +127,19 @@ def reconcile_projection(
     audit: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     max_audit_age_seconds: int = 1800,
-    allow_genesis_bootstrap: bool = True,
+    require_fresh_audit: bool = False,
 ) -> dict[str, Any]:
     """Compare a reducer result with the committed ledger.
 
     The ledger is never trusted for its own watermark.  The caller supplies the
-    latest authoritative audit check-run facts; a missing/failed/stale audit is
-    a failure, never a historical-success fallback.
+    latest authoritative audit check-run facts.
+
+    ``require_fresh_audit=False`` (the auditor's own mode) recomputes and
+    publishes the audit, so it only refuses when a failure is already recorded
+    against this tip.  ``require_fresh_audit=True`` is the consumer mode: the
+    caller is about to trust the ledger without replaying it, so the audit must
+    exist, be recent, and belong to the current ``main`` tip.  Neither mode ever
+    falls back to a historical success.
     """
     current = now or datetime.now(timezone.utc)
     expected_tasks = [copy.deepcopy(dict(reduction.projection))]
@@ -127,11 +170,14 @@ def reconcile_projection(
             "event_log_digest": reduction.event_log_digest,
         }
 
-    genesis = not observed_tasks and not source.get("event_ids")
-    audit_ok, audit_reason = _audit_is_fresh(
-        audit, now=current, max_age_seconds=max_audit_age_seconds,
-    )
-    if not audit_ok and not (allow_genesis_bootstrap and genesis):
+    if require_fresh_audit:
+        fresh, audit_reason = _audit_is_fresh(
+            audit, now=current, max_age_seconds=max_audit_age_seconds,
+        )
+        audit_blocked = not fresh
+    else:
+        audit_blocked, audit_reason = _audit_blocks_replay(audit)
+    if audit_blocked:
         return {
             "status": "BLOCKED",
             "reason": audit_reason,

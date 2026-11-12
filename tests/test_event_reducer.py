@@ -22,8 +22,15 @@ from packages.fpf_coordinator.dispatch.journal import (
     ConcurrencyConflictError,
     StateJournal,
 )
-from packages.fpf_coordinator.dispatch.poller import genesis_ledger, ledger_from_reduction
-from packages.fpf_coordinator.dispatch.reconcile import reconcile_projection
+from packages.fpf_coordinator.dispatch.poller import (
+    genesis_ledger,
+    ledger_from_reduction,
+    ledger_has_content,
+)
+from packages.fpf_coordinator.dispatch.reconcile import (
+    audit_is_fresh,
+    reconcile_projection,
+)
 from packages.fpf_coordinator.dispatch.reducer import reduce_events
 from packages.fpf_coordinator.dispatch.states import TERMINAL_PHASES, Phase
 from packages.fpf_policy.pr_gate import classify
@@ -396,6 +403,82 @@ class TestProjectionAndReconciliation(unittest.TestCase):
         self.assertEqual(canonical_json_bytes(first), canonical_json_bytes(second))
         self.assertEqual(first["source"]["event_count"], 0)
         self.assertEqual(first["source"]["projection_digest"], hashlib.sha256(b"[]\n").hexdigest())
+
+    def test_missing_audit_on_fresh_main_tip_can_bootstrap(self):
+        """The run must be able to produce the first audit for a new main tip."""
+        values = lifecycle_events()
+        result = reduce(values)
+        ledger = ledger_from_reduction(result, REPO, None)
+        now = datetime.now(timezone.utc)
+        missing = {
+            "exists": False,
+            "main_tip_sha": MAIN,
+            "latest_conclusion": None,
+            "latest_completed_at": None,
+            "latest_head_sha": None,
+            "latest_head_on_main": True,
+        }
+        report = reconcile_projection(result, ledger, audit=missing, now=now)
+        self.assertEqual(report["status"], "PASS", report)
+        self.assertEqual(report["reason"], "RECONCILED")
+
+    def test_missing_audit_does_not_mask_a_tampered_ledger(self):
+        values = lifecycle_events()
+        result = reduce(values)
+        ledger = ledger_from_reduction(result, REPO, None)
+        ledger["tasks"][0]["facts"]["merged_sha"] = MERGE
+        report = reconcile_projection(result, ledger, audit={"exists": False}, now=datetime.now(timezone.utc))
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertEqual(report["reason"], "BLOCKED_RECONCILIATION")
+
+    def test_aged_success_is_reusable_by_the_auditor_but_not_by_a_consumer(self):
+        values = lifecycle_events()
+        result = reduce(values)
+        ledger = ledger_from_reduction(result, REPO, None)
+        now = datetime.now(timezone.utc)
+        audit = {
+            "exists": True,
+            "latest_conclusion": "success",
+            "latest_completed_at": (now - timedelta(hours=2)).isoformat(),
+            "latest_head_sha": MAIN,
+            "main_tip_sha": MAIN,
+            "latest_head_on_main": True,
+        }
+        self.assertEqual(
+            reconcile_projection(result, ledger, audit=audit, now=now)["status"], "PASS",
+        )
+        consumer = reconcile_projection(
+            result, ledger, audit=audit, now=now, require_fresh_audit=True,
+        )
+        self.assertEqual(consumer["status"], "BLOCKED")
+        self.assertEqual(consumer["reason"], "LEDGER_STALE")
+        self.assertEqual(audit_is_fresh(audit, now=now)[0], False)
+
+    def test_consumer_mode_requires_an_audit_record(self):
+        values = lifecycle_events()
+        result = reduce(values)
+        ledger = ledger_from_reduction(result, REPO, None)
+        consumer = reconcile_projection(
+            result,
+            ledger,
+            audit={"exists": False},
+            now=datetime.now(timezone.utc),
+            require_fresh_audit=True,
+        )
+        self.assertEqual(consumer["status"], "BLOCKED")
+        self.assertEqual(consumer["reason"], "AUDIT_MISSING")
+
+    def test_ledger_has_content_separates_genesis_from_projected_ledgers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state-ledger.json"
+            self.assertFalse(ledger_has_content(path))
+            path.write_text(json.dumps(genesis_ledger(REPO)), encoding="utf-8")
+            self.assertFalse(ledger_has_content(path))
+            path.write_text(
+                json.dumps(ledger_from_reduction(reduce(lifecycle_events()), REPO, None)),
+                encoding="utf-8",
+            )
+            self.assertTrue(ledger_has_content(path))
 
     def test_incomplete_event_set_requires_human(self):
         result = reduce(lifecycle_events()[:2], complete=False)
