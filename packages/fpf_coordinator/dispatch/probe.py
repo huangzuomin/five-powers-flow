@@ -485,8 +485,10 @@ class ProbeLog:
 
 
 def matching_refs(client: GitHubClient, probe_id: str) -> list[dict[str, Any]]:
+    # matching-refs also expects the short form (``tags/...``, not ``refs/tags/...``).
+    prefix = f"{PROBE_REF_PREFIX}{probe_id}".removeprefix("refs/")
     status, body = client.call(
-        "GET", f"/repos/{client.repo}/git/matching-refs/{PROBE_REF_PREFIX}{probe_id}",
+        "GET", f"/repos/{client.repo}/git/matching-refs/{prefix}",
     )
     _require(status == 200 and isinstance(body, list), "PROBE_VERIFY_FAILED", f"HTTP {status}")
     return [item for item in body if isinstance(item, dict)]
