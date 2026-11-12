@@ -4,7 +4,7 @@ probe_authorizations:
     probe_id: g4-probe-20261112-a
     task_id: FPF2-G4-REDUCER-01
     work_order: WO-20261112-g4-final-remediation
-    authorization_pr: PENDING_PROBE_PR
+    authorization_pr: 93
     authorized_actors:
       - fpf-qa-bot-huangzuomin[bot]
       - huangzuomin
@@ -18,7 +18,7 @@ probe_authorizations:
     probe_id: g4-probe-20261112-b
     task_id: FPF2-G4-REDUCER-01
     work_order: WO-20261112-g4-final-remediation
-    authorization_pr: PENDING_PROBE_PR
+    authorization_pr: 93
     authorized_actors:
       - fpf-qa-bot-huangzuomin[bot]
       - huangzuomin
