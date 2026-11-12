@@ -201,3 +201,12 @@
 - **裁决认定**：QA 总指挥 FINAL-R3/R4 均裁 `ACCEPTED_AS_GOVERNANCE_HARDENING`，建议作为 G2 宪制强制力输入；原则 = "被审查者可以提出修改规则，但不能自行决定本次审查适用什么规则"
 - **NOT_RUN / 边界**：未改 `qa_collector.py` / `pr_gate.py` / `qa_artifact.py`；未改 `REQUIRED_PROFILE_EVIDENCES` 语义（仅后续 PR #100 生效）；生产/计费 `NOT_AUTHORIZED`
 - **归档时间**：2026-11-12
+
+### [FPF2-GOV-CLOSEOUT-20261112] 治理收尾：AGENTS.md 入库 + 钩子审计 + EVDEMO 记账
+- **目标**：把治理文本与门禁实际路由对齐；处置过宽的本地 pre-push 钩子；完成 G4 的 EVDEMO 记账
+- **AGENTS.md 三项编辑**：① §四 地图路径 `docs/PROJECT-MAP.md` → `docs/coordination/project-map.md`（与 `MAP_FILES` 白名单一致）；② 新增 §七「负责人分析代理（ZCode）职责边界」（三方职责表 + 四条越界红线，按工作区 `ZCODE-ROLE.md` 缩编）；③ `.github/CODEOWNERS` 删除 4 条不存在路径（`PROJECT-MAP.md`/`docs/coordination/PROJECT-MAP.md`/`LESSONS.md`/`docs/coordination/LESSONS.md`），改为两条真实小写路径
+- **AGENTS.md 入库事实**：该文件此前**从未进入 origin/main**（仅存在于本地 main 的 3 个未推送提交 `3520bba`/`fa6cf52` 与工作区），而门禁 `protected.EXACT` 早已把 `agents.md` 列为受保护路径 —— 受保护对象在主干上不存在，属"保护空位"；本切片将其正式入库
+- **钩子审计**：`.git/hooks/pre-push`（1835 B，2026-10-25 03:29，来自 `templates/git-hooks/pre-push.template`，`core.hooksPath` 未设置）会阻断任何触及地图/lessons 的推送，**无 Scribe 例外**；实际效果是把合法记账 PR 推向 `--no-verify`（同时关闭该次推送的全部钩子检查）。处置：保留阻断意图，显式放行 `refs/heads/fpf/scribe-*` 与 `fpf/map-*`；同步修正跟踪模板并新增 `tests/test_hook_template.py`（6 项，真实执行钩子脚本）
+- **EVDEMO 记账**：G4 验收第 3 条（事件驱动、零人工状态编辑）由 trusted `state-project.yml` 实跑 run `43184625679` 满足 —— 投影含 `task_id=FPF2-G4-REDUCER-01`、16 个事件、末条 `PR_MERGED`、`aggregate_version=17`、`projection_digest=a91dd1ec…`；`FPF2-G4-EVDEMO-01` 标签**退役**（不再作为独立任务跟踪，其验收并入本条）
+- **NOT_RUN / 边界**：`production_claim_e2e` 维持 `NOT_RUN`；生产部署与真实计费 `NOT_AUTHORIZED`；H1–H4 中 H2 进入设计复裁，H1/H3/H4 维持 `PLAN_ONLY`；`sovereign_override` 零使用
+- **归档时间**：2026-11-12

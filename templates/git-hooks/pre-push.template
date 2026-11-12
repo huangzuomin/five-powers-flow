@@ -23,9 +23,21 @@ do
     [ -z "$merge_base" ] && merge_base="$base_ref"
 
     PROTECTED_RE='(^|/)(PROJECT[-_]MAP|LESSONS)\.md$'
+    # Scribe branches are the *sanctioned* route for these files (RFC-001).
+    # Blocking them only pushes the scribe into `--no-verify`, which disables
+    # every hook check for that push — strictly worse than an explicit allowlist.
+    SCRIBE_RE='^refs/heads/fpf/(scribe|map)-'
     touched_protected=$(git diff --name-only "$merge_base..$local_sha" 2>/dev/null | grep -Ei "$PROTECTED_RE")
 
     if [ -n "$touched_protected" ]; then
+        if printf '%s' "$remote_ref" | grep -Eq "$SCRIBE_RE"; then
+            echo ""
+            echo "[FPF PRE-PUSH] Scribe branch $remote_ref updating governance file(s):"
+            echo "$touched_protected"
+            echo "Allowed by the fpf/scribe-* / fpf/map-* allowlist; the PR gate still governs the merge."
+            echo ""
+            continue
+        fi
         echo ""
         echo "======================================================================"
         echo "[FPF PRE-PUSH BLOCKED] Anti-Tamper Violation Detected!"

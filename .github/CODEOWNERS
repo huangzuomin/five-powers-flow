@@ -3,10 +3,10 @@
 # identify expected governance reviewers. Actual blocking depends on the
 # native GitHub required_approving_review_count >= 1 configuration.
 
-PROJECT-MAP.md            @huangzuomin
-docs/coordination/PROJECT-MAP.md @huangzuomin
-LESSONS.md                @huangzuomin
-docs/coordination/LESSONS.md     @huangzuomin
+# Canonical map/lessons live under docs/coordination/ in lower case; the
+# previous entries named paths that do not exist (case-sensitive on Linux).
+/docs/coordination/project-map.md @huangzuomin
+/docs/coordination/lessons.md     @huangzuomin
 docs/SPECIFICATION.md     @huangzuomin
 schemas/                  @huangzuomin
 
