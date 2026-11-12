@@ -5,7 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 
-import pytest
+try:  # the `validate` job's unittest discovery has no pytest; H2 runs via EVID-37
+    import pytest
+except ModuleNotFoundError:  # pragma: no cover
+    import unittest
+
+    raise unittest.SkipTest("pytest not installed; H2 contracts execute via QA EVID-37")
 
 from _h2_support import (add_worktree, git, init_repo, make_reclaimable,
                          write_marker)

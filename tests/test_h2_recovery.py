@@ -7,7 +7,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
+try:  # the `validate` job's unittest discovery has no pytest; H2 runs via EVID-37
+    import pytest
+except ModuleNotFoundError:  # pragma: no cover
+    import unittest
+
+    raise unittest.SkipTest("pytest not installed; H2 contracts execute via QA EVID-37")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
