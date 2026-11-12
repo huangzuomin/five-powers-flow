@@ -226,6 +226,42 @@ def command_reconcile(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "PASS" else 1
 
 
+def command_collect(args: argparse.Namespace) -> int:
+    """Read-only trusted collection used by FACT_SOURCE_VERIFY (F2 v5/v7)."""
+    from .fact_source import stable_observation
+
+    token = _token(args.token_env)
+    snapshot, rounds = stable_observation(
+        args.repo, int(args.pr_number), args.task_id, args.project_id, token,
+    )
+    Path(args.out).write_text(
+        "\n".join(
+            json.dumps(event, ensure_ascii=False, sort_keys=True)
+            for event in snapshot.events
+        ) + ("\n" if snapshot.events else ""),
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "COLLECTED",
+        "task_id": args.task_id,
+        "event_count": len(snapshot.events),
+        "event_log_digest": snapshot.as_dict()["event_log_digest"],
+        "rounds": rounds,
+        "stable_observation": True,
+        "atomic_snapshot_claimed": False,
+    }
+    if args.snapshot:
+        Path(args.snapshot).write_text(
+            json.dumps(
+                {**summary, "passes": [snapshot.as_dict()]},
+                ensure_ascii=False, indent=2, sort_keys=True,
+            ) + "\n",
+            encoding="utf-8",
+        )
+    print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="FPF G4 state ledger projector")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -253,6 +289,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconcile.add_argument("--no-check-run", action="store_true")
     reconcile.set_defaults(func=command_reconcile)
+
+    collect = sub.add_parser("collect", help="collect a stable, read-only trusted observation")
+    _common(collect)
+    collect.add_argument("--out", required=True)
+    collect.add_argument("--snapshot")
+    collect.add_argument("--strict", action="store_true")
+    collect.set_defaults(func=command_collect)
     return parser
 
 

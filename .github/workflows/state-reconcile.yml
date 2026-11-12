@@ -1,8 +1,6 @@
 name: FPF State Ledger Reconcile
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   push:
     paths:
       - "packages/fpf_coordinator/dispatch/**"
@@ -30,12 +28,7 @@ on:
         default: main
         type: string
 
-permissions:
-  contents: read
-  issues: read
-  pull-requests: read
-  actions: read
-  checks: write
+permissions: {}
 
 concurrency:
   group: fpf-state-ledger-audit
@@ -45,6 +38,11 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Checkout replay source
         uses: actions/checkout@v4
@@ -88,31 +86,32 @@ jobs:
           FPF_PROJECT_ID="${INPUT_PROJECT_ID:-${FPF_PROJECT_ID:-FPF}}"
           FPF_PR_NUMBER="${INPUT_PR_NUMBER:-${FPF_PR_NUMBER:-0}}"
           FPF_SOURCE_REF="${INPUT_SOURCE_REF:-${FPF_SOURCE_REF:-$GITHUB_SHA}}"
-          # Only a scheduled run, or an explicit dispatch of main, may publish the
-          # authoritative audit. Anything replaying another commit is a trial:
-          # by ruling T-01 a trial creates no check run at all, so branch code can
-          # never masquerade as the audit even behind a trial-suffixed check.
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            AUTHORITATIVE=1
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$FPF_SOURCE_REF" = "main" ]; then
-            AUTHORITATIVE=1
-          else
-            AUTHORITATIVE=0
-          fi
-          if [ "$AUTHORITATIVE" = "1" ]; then
-            CHECK_FLAGS="--check-name fpf-state-ledger-audit"
-          else
-            CHECK_FLAGS="--no-check-run"
-            echo "Trial replay of \`$FPF_SOURCE_REF\`: no check run created (T-01)." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          # Ruling T-01: this workflow never creates a check run, for any trigger.
+          # The authoritative `fpf-state-ledger-audit` check belongs solely to
+          # state-audit.yml, whose definition always comes from the default branch.
+          echo "Read-only replay of \`$FPF_SOURCE_REF\`: no check run created (T-01)." >> "$GITHUB_STEP_SUMMARY"
           python -m packages.fpf_coordinator.dispatch.poller reconcile \
             --repo "${{ github.repository }}" \
             --task-id "$FPF_TASK_ID" \
             --project-id "$FPF_PROJECT_ID" \
             --pr-number "$FPF_PR_NUMBER" \
             --ledger packages/fpf_coordinator/dispatch/state-ledger.json \
-            $CHECK_FLAGS \
+            --no-check-run \
             --report "reconciliation-${GITHUB_RUN_ID}.json"
+      - name: Assert this workflow cannot create an authoritative check (T-01)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CODE=$(curl -s -o check-run-response.json -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/check-runs" \
+            -d "{\"name\":\"fpf-state-ledger-audit\",\"head_sha\":\"${GITHUB_SHA}\",\"status\":\"completed\",\"conclusion\":\"success\"}")
+          echo "trial check-run POST status: ${CODE}" >> "$GITHUB_STEP_SUMMARY"
+          test "${CODE}" = "403"
       - name: Retain reconciliation evidence
         if: always()
         uses: actions/upload-artifact@v4
