@@ -1,0 +1,42 @@
+name: FPF Claim Probe Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      probe_id:
+        description: Registered sandbox probe id
+        required: true
+        type: string
+      attempts:
+        description: Concurrent attempts per wave (2-6)
+        required: false
+        default: "4"
+        type: string
+      window_seconds:
+        description: Probe window in seconds (30-120)
+        required: false
+        default: "90"
+        type: string
+
+permissions: {}
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Emit untrusted request
+        env:
+          PROBE_ID: ${{ inputs.probe_id }}
+          ATTEMPTS: ${{ inputs.attempts }}
+          WINDOW: ${{ inputs.window_seconds }}
+        run: python -m packages.fpf_coordinator.dispatch.probe_request --out probe-request.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fpf-probe-request-${{ github.run_id }}
+          path: probe-request.json
+          retention-days: 7

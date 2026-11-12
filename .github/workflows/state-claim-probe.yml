@@ -1,0 +1,163 @@
+name: FPF Ledger Claim Probe
+
+on:
+  workflow_run:
+    workflows: ["FPF Claim Probe Trigger"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  probe:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin and verify the trusted workflow SHA
+        env:
+          PINNED_SHA: ${{ github.workflow_sha }}
+          OBSERVED_MAIN_TIP: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test -n "${PINNED_SHA}" || { echo "PINNED_SHA_MISSING"; exit 1; }
+          git fetch --no-tags origin main
+          git cat-file -e "${PINNED_SHA}^{commit}"
+          git merge-base --is-ancestor "${PINNED_SHA}" origin/main
+          git checkout --detach "${PINNED_SHA}"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path("probe-evidence.json").write_text(json.dumps({
+              "pinned_sha": os.environ["PINNED_SHA"],
+              "observed_main_tip": os.environ["OBSERVED_MAIN_TIP"],
+              "workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF", ""),
+              "registry_source": "pinned_sha",
+          }, ensure_ascii=False, indent=2), encoding="utf-8")
+          PY
+
+      - name: Verify trigger identity (platform facts)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          EVENT_PATH: ${{ github.event.workflow_run.path }}
+          EVENT_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          test "${EVENT_PATH}" = ".github/workflows/state-claim-probe-trigger.yml"
+          test "${EVENT_REPO}" = "${GITHUB_REPOSITORY}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${TRIGGER_RUN_ID}" \
+            --jq '{path:.path,event:.event,head_sha:.head_sha,actor:.actor.login,
+                   triggering_actor:.triggering_actor.login,
+                   head_repository:.head_repository.full_name}' > trigger-run.json
+          python - <<'PY'
+          import json, os, sys
+          facts = json.load(open("trigger-run.json", encoding="utf-8"))
+          expected = {
+              "path": ".github/workflows/state-claim-probe-trigger.yml",
+              "event": "workflow_dispatch",
+              "actor": os.environ["EVENT_ACTOR"],
+              "triggering_actor": os.environ["EVENT_TRIGGERING_ACTOR"],
+              "head_repository": os.environ["GITHUB_REPOSITORY"],
+          }
+          for key, value in expected.items():
+              if facts.get(key) != value:
+                  print(f"PROBE_ACTOR_MISMATCH:{key}")
+                  sys.exit(1)
+          if facts["actor"] != facts["triggering_actor"]:
+              print("PROBE_ACTOR_MISMATCH:actor_vs_triggering")
+              sys.exit(1)
+          PY
+
+      - name: Download untrusted request artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p request
+          gh run download "${TRIGGER_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "fpf-probe-request-${TRIGGER_RUN_ID}" \
+            --dir request
+          test -f request/probe-request.json
+          test "$(wc -c < request/probe-request.json)" -le 4096
+
+      - name: Validate request against the pinned registry
+        env:
+          EVENT_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, re, sys
+          sys.path.insert(0, os.getcwd())
+          from packages.fpf_coordinator.dispatch.probe import (
+              ProbeError, load_registry, select_authorization, validate_request,
+          )
+          registry = load_registry(open(".fpf/probe-authorizations.yaml", encoding="utf-8").read())
+          data = json.load(open("request/probe-request.json", encoding="utf-8"))
+          auth = select_authorization(
+              registry,
+              probe_id=str(data.get("probe_id") or ""),
+              actor=os.environ["EVENT_ACTOR"],
+              triggering_actor=os.environ["EVENT_TRIGGERING_ACTOR"],
+          )
+          request = validate_request(data, auth)
+          open(".probe-request.env", "a", encoding="utf-8").write(
+              f"PROBE_ID={request.probe_id}\nATTEMPTS={request.attempts}\nWINDOW={request.window_seconds}\n"
+              f"AUTHORIZATION_ID={auth.authorization_id}\n"
+          )
+          PY
+          cat .probe-request.env >> "${GITHUB_ENV}"
+
+      - name: Run governed probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.event.workflow_run.actor.login }}
+          TRIGGER_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          PINNED_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          python -m packages.fpf_coordinator.dispatch.probe run \
+            --repo "${GITHUB_REPOSITORY}" \
+            --registry .fpf/probe-authorizations.yaml \
+            --probe-id "${PROBE_ID}" \
+            --attempts "${ATTEMPTS}" \
+            --window "${WINDOW}" \
+            --actor "${ACTOR}" \
+            --triggering-actor "${TRIGGER_ACTOR}" \
+            --pinned-sha "${PINNED_SHA}" \
+            --base-sha "$(git rev-parse HEAD)" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --log "probe-${GITHUB_RUN_ID}.jsonl" \
+            --summary "probe-${GITHUB_RUN_ID}.json" \
+            | tee "probe-${GITHUB_RUN_ID}.stdout.json"
+
+      - name: Retain probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpf-claim-probe-${{ github.run_id }}
+          path: |
+            probe-*.jsonl
+            probe-*.json
+            probe-*.stdout.json
+            probe-evidence.json
+            trigger-run.json
+          retention-days: 90
+          if-no-files-found: warn

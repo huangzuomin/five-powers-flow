@@ -1,0 +1,30 @@
+schema_version: fpf-probe-auth/v1
+probe_authorizations:
+  - authorization_id: PA-4acce737141e921dd247d884e2904890e3122946ed8f5918163f4cad0babba86
+    probe_id: g4-probe-20261112-a
+    task_id: FPF2-G4-REDUCER-01
+    work_order: WO-20261112-g4-final-remediation
+    authorization_pr: 93
+    authorized_actors:
+      - fpf-qa-bot-huangzuomin[bot]
+      - huangzuomin
+    max_runs: 4
+    max_attempts: 6
+    max_window_seconds: 120
+    expires_at: 2026-12-12T00:00:00Z
+    inherits_r4_claim_exception: false
+    cleanup: manual, separate authorization + ledger
+  - authorization_id: PA-d891093452b052799ef3d04e0c31254593470faae64b5b44b02eb8a3bcf911d5
+    probe_id: g4-probe-20261112-b
+    task_id: FPF2-G4-REDUCER-01
+    work_order: WO-20261112-g4-final-remediation
+    authorization_pr: 93
+    authorized_actors:
+      - fpf-qa-bot-huangzuomin[bot]
+      - huangzuomin
+    max_runs: 4
+    max_attempts: 6
+    max_window_seconds: 120
+    expires_at: 2026-12-12T00:00:00Z
+    inherits_r4_claim_exception: false
+    cleanup: manual, separate authorization + ledger
