@@ -115,7 +115,9 @@ class AuthorizationTests(unittest.TestCase):
         entries = load_registry(
             (root / ".fpf" / "probe-authorizations.yaml").read_text(encoding="utf-8")
         )
-        self.assertEqual(len(entries), 2)
+        self.assertEqual(len(entries), 3)
+        self.assertEqual(len({entry.probe_id for entry in entries}), 3)
+        self.assertIn("g4-probe-20261112-c", {entry.probe_id for entry in entries})
         self.assertEqual(entries[0].expires_at, "2026-12-12T00:00:00Z")
 
     def test_registry_roundtrip(self) -> None:
