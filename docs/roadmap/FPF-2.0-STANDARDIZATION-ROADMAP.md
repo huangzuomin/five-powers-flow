@@ -999,16 +999,51 @@ G2 宪制强制力 → G3 凭据与身份边界 → G4 状态机归约 → H1 �
 
 #### 8.7.2 G2 · 宪制强制力落地
 
-- **落点阶段：** 阶段 2（Control Plane）前置门禁；状态 `PLAN_ONLY`。
-- **问题定义：** 当前强制力由“仓库内 check + 人工纪律”叠加而成。GitHub 原生 `required_approving_review_count=0`，CODEOWNERS 指向负责人本人；修改策略代码的 PR 虽然要求第二名独立批准，但 `sovereign_override` 允许作者本人放行；DEV 与 QA 的“独立身份”只体现为登录名不同，密钥仍在同一台宿主机。
-- **反例证据：** 2026-11-11 实测 `GET /repos/huangzuomin/five-powers-flow/branches/main/protection`：`enforce_admins=true`，但 `required_approving_review_count=0`；`.github/CODEOWNERS` 全部指向 `@huangzuomin`；`packages/fpf_policy/pr_gate.py` 的 `GATE_PR` 分支在缺少第二批准时，只要 `sovereign_override=true` 且 `sovereign_authorizer == author` 即放行。复盘记载的 `403 Upgrade to GitHub Pro` 发生在私有仓库阶段，当前仓库已 PUBLIC，该报错不再复现——这恰好证明强制力会随仓库可见性与套餐漂移，不能作为宪制基础。
-- **目标行为：** 二选一或叠加：①启用 GitHub Rulesets + required approvals + 独立 QA team，让平台层拒绝“自审自批”；②不依赖套餐，改用“制品签名 + 独立校验器”——QA 产物由独立私钥签名，合并门禁验证签名链与 SHA 绑定，而不是只比对登录名。
-- **验收标准（可测）：**
-  1. 无独立 QA 批准的 PR 在平台层无法合并（API 返回 405/422 或 required check 失败），并留存一次真实拒绝记录；
-  2. `required_approving_review_count >= 1` 且批准人 ≠ PR 作者 ≠ 策略修改人；或签名校验器对未签名/错签制品返回非零退出码；
-  3. 修改 `packages/fpf_policy/`、`.github/` 的 PR 需要两名不同身份批准，测试覆盖“同一人二次批准被拒”。
+- **落点阶段：** 阶段 2（Control Plane）前置门禁。**状态：`PARTIAL` 结案**——工位登记表与门禁身份链已落地（PR #85，合并 `2da17a9e`），`sovereign_override` 自授权分支已废除；GitHub 原生 review 计数子项经裁定**不再追求**，改以 `validate-card` 为唯一强制点。分支保护子项由此关闭。
+- **问题定义（保留原始三问）：** 谁有资格批准、凭什么批准、密钥放在哪。
+
+**裁定（2026-11-12，负责人代理）：** G2 对 review-count 缺口的处置，由“配置 `required_approving_review_count=1`”改为“以 `validate-card` 为唯一强制点的书面裁定”。本裁定同时删除原 C4 的“`count=1` + 测试 PR 验证”步骤。
+
+##### 一、现状证据
+
+- `GET /repos/huangzuomin/five-powers-flow/branches/main/protection`（2026-11-12 快照）：required checks = `validate` + `validate-card`（`strict=true`）、`enforce_admins=true`、`allow_force_pushes=false`、`allow_deletions=false`、`required_approving_review_count=0`、`require_code_owner_reviews=false`（本轮拆除）。
+- `count=0` 下 GitHub 原生 review 计数是**惰性**的：合并事实由 required checks 决定。近期合并先例：#85、#87、#88、#89 均在 `count=0` 下完成；其中 #85/#87/#89 的批准主体为 App 身份（仓库权限模型 `permission=none`），在原生计数下本就不成立。
+- **事实纠正：** 早前拟写的“PR #67/#78 零 review 合并先例”**不成立**——API 实测 #67 有 5 条 review、#78 有 1 条。可成立的表述是：在 `count=0` 下这些 review 只对 `validate-card` 有意义，对 GitHub 原生计数没有意义。
+- 一次性探针（PR #86，验证后关闭并删除分支）：把 `count` 提到 1 后，reviewer2（App）已钉 head 的 `APPROVED` 仍被判为 `REVIEW_REQUIRED`；`GET /collaborators/fpf-reviewer-huangzuomin[bot]/permission` 返回 `{"permission":"none"}`，该 review 的 `authorAssociation=NONE`。
+
+##### 二、语义强度对比
+
+| 维度 | `validate-card`（唯一强制点） | GitHub 原生 `required_approving_review_count` |
+|---|---|---|
+| 校验对象 | **身份链**：reviewer ≠ 作者、review 钉在 head SHA、body 含合法 `QA_RESULT` | **计数**：N 个有写权限的非作者批准 |
+| 证据绑定 | `qa_run_id` 对应 run 的 `actor`/`triggering_actor` = reviewer；artifact 名与 digest 绑定 `tested_sha` | 无 |
+| 第二批准 | `GATE_PR` 要求第二个**不同工位**批准（R3） | 仅要求"另一个人"，不区分工位 |
+| 自授权 | `sovereign_override` 键存在即拒（R5） | 作者不能自批，但可被同谋账号绕过 |
+| 公开仓库噪音 | 无（登录名与工位登记表比对） | 陌生人/无关账号的 approve 计入噪音层 |
+
+结论：原生命中计数提供的是"有几个账号点过同意"，`validate-card` 提供的是"谁、在哪个 SHA、拿什么独立证据点的同意"。后者严格覆盖前者。
+
+##### 三、选项与否决理由
+
+1. **机器 USER 账号 + write 协作者（使 `count=1` 可达）**：否决。引入长期人格式凭据，且裁决者获得**常驻写权限**会自我破坏"裁决身份 ≠ 开发身份"的分离。
+2. **由 GitHub App 承担 required review**：不可行。App 安装身份在仓库权限模型中为 `permission=none`，其批准不计入原生计数（PR #86 实测）。
+3. **重构 CODEOWNERS 指向真实非作者账号**：不可行。当前 `.github/CODEOWNERS` 六条路径中四条**指向不存在的文件**——`PROJECT-MAP.md`、`docs/coordination/PROJECT-MAP.md`、`LESSONS.md`、`docs/coordination/LESSONS.md` 均因大小写与实际文件（`docs/coordination/project-map.md`、`docs/coordination/lessons.md`）不符而失效；即便修正路径，唯一 code owner 仍是 PR 作者本人。
+
+##### 四、残余风险与缓解
+
+- **R1 强制点单点化**：`validate-card` 一旦被移出 required checks，门禁即失效。缓解：`.github/` 属受保护路径，任何 workflow 改动走 `GATE_PR`（需独立 QA 证据 + 第二独立工位批准）；分支保护变更不经过 PR 流程，故约定"变更即治理事件"，须记入 `docs/coordination/project-map.md` 与 `lessons.md`。
+- **R2 哑开关陷阱**：若后人把 `require_code_owner_reviews` 与 `count>=1` 同时启用，CODEOWNERS 指向作者将要求"作者批准自己的 PR"，使主干永久不可合并。缓解：本轮已置 `require_code_owner_reviews=false`，并在本条保留完整推理链。
+- **R3 门禁代码自身被削弱**：缓解同 R1；另有 `tests/` 全量回归与工位负向用例作为信号。
+
+##### 五、验收标准（可测）
+
+1. 无 `validate-card` 通过的 PR 在主干预层无法合并（API 405/422 或 required check 失败），并留存一次真实拒绝记录；
+2. 非登记工位身份签发 `QA_RESULT` 被 fail-closed 拒绝（负向测试随代码入库）；
+3. 修改 `packages/fpf_policy/`、`.github/` 的 PR 需要两个不同工位批准，测试覆盖"同一身份二次批准被拒"；
+4. 分支保护快照显示 required checks 含 `validate` + `validate-card`、`enforce_admins=true`、`require_code_owner_reviews=false`、`count` 维持 `0`，且与本裁定一致。
+
 - **依赖：** G3 定义 Principal 与密钥归属；H1 定义项目边界。
-- **与既有阶段边界：** 阶段 2 已有人工审批节点，G2 只补“平台/密码学强制”，不重写 24 状态机。
+- **与既有阶段边界：** 阶段 2 已有人工审批节点，G2 只补"平台/密码学强制"，不重写 24 状态机。
 
 #### 8.7.3 G3 · 凭据与身份边界
 
