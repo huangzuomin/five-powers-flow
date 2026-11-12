@@ -22,6 +22,16 @@ from .journal import (
     AttemptLimitExceededError,
     TaskNotFoundError,
 )
+from .events import (
+    EventBatch,
+    NormalizedEvent,
+    EventValidationError,
+    build_event,
+    normalize_event,
+    prepare_events,
+)
+from .reducer import Reduction, reduce_events
+from .reconcile import reconcile_projection
 
 __all__ = [
     "Phase",
@@ -46,4 +56,13 @@ __all__ = [
     "ConcurrencyConflictError",
     "AttemptLimitExceededError",
     "TaskNotFoundError",
+    "EventBatch",
+    "NormalizedEvent",
+    "EventValidationError",
+    "build_event",
+    "normalize_event",
+    "prepare_events",
+    "Reduction",
+    "reduce_events",
+    "reconcile_projection",
 ]

@@ -1,0 +1,73 @@
+name: FPF State Ledger Reconcile
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: FPF task ID
+        required: true
+        default: FPF2-G4-EVDEMO-01
+        type: string
+      project_id:
+        description: FPF project ID
+        required: true
+        default: FPF
+        type: string
+      pr_number:
+        description: Implementation PR number; 0 discovers it from task_id
+        required: true
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+  checks: write
+
+concurrency:
+  group: fpf-state-ledger-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install projector dependencies
+        run: python -m pip install pyyaml
+      - name: Replay GitHub facts and compare the committed ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FPF_TASK_ID: ${{ inputs.task_id || 'FPF2-G4-EVDEMO-01' }}
+          FPF_PROJECT_ID: ${{ inputs.project_id || 'FPF' }}
+          FPF_PR_NUMBER: ${{ inputs.pr_number || '0' }}
+        run: |
+          set -euo pipefail
+          python -m packages.fpf_coordinator.dispatch.poller reconcile \
+            --repo "${{ github.repository }}" \
+            --task-id "$FPF_TASK_ID" \
+            --project-id "$FPF_PROJECT_ID" \
+            --pr-number "$FPF_PR_NUMBER" \
+            --ledger packages/fpf_coordinator/dispatch/state-ledger.json \
+            --report "reconciliation-${GITHUB_RUN_ID}.json"
+      - name: Retain reconciliation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpf-state-reconciliation-${{ github.run_id }}
+          path: reconciliation-*.json
+          if-no-files-found: warn
+          retention-days: 30

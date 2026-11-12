@@ -136,6 +136,37 @@ class StateJournal:
                     recorded_at TEXT NOT NULL
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS task_event_aggregates (
+                    task_id TEXT PRIMARY KEY,
+                    aggregate_version INTEGER NOT NULL,
+                    last_event_id TEXT,
+                    event_log_digest TEXT NOT NULL
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS task_events (
+                    event_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    aggregate_sequence INTEGER NOT NULL,
+                    source_sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    payload_digest TEXT NOT NULL,
+                    UNIQUE(task_id, aggregate_sequence)
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS task_projections (
+                    task_id TEXT PRIMARY KEY,
+                    aggregate_version INTEGER NOT NULL,
+                    projection_json TEXT NOT NULL,
+                    projection_digest TEXT NOT NULL,
+                    last_event_id TEXT NOT NULL,
+                    event_log_digest TEXT NOT NULL
+                );
+            """)
             self._conn.commit()
 
     def create_task(
@@ -485,3 +516,216 @@ class StateJournal:
         if not row:
             return None
         return Phase(row["phase"]), row["version"], json.loads(row["snapshot_json"])
+
+    # G4 event aggregates and read-only job projections.  These tables are
+    # deliberately separate from ``tasks``: no G4 write path can mutate the
+    # runtime daemon's Phase owner.
+    def append_projection(
+        self,
+        task_id: str,
+        expected_version: int,
+        events: list[Any],
+        projection: dict,
+        *,
+        projection_digest: str,
+        event_log_digest: str,
+    ) -> int:
+        """Atomically append new events and their derived projection.
+
+        ``events`` must already be in deterministic reducer order.  Exact
+        duplicate event IDs are ignored and do not increase the aggregate
+        version.  The first append uses ``expected_version=0`` and lands the
+        aggregate directly at version N; later appends use a single-row CAS.
+        """
+        if expected_version < 0:
+            raise ValueError("expected_version must be non-negative")
+        if not task_id or not projection_digest or not event_log_digest:
+            raise ValueError("task_id, projection_digest and event_log_digest are required")
+
+        ordered: list[dict] = []
+        seen: set[str] = set()
+        for event in events:
+            value = event.to_dict() if hasattr(event, "to_dict") else dict(event)
+            event_id = str(value.get("event_id") or "").lower()
+            if not event_id or event_id in seen:
+                continue
+            if str(value.get("task_id")) != task_id:
+                raise ValueError("append_projection received a foreign-task event")
+            seen.add(event_id)
+            ordered.append(value)
+
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute("BEGIN IMMEDIATE;")
+                cur.execute(
+                    "SELECT aggregate_version, last_event_id, event_log_digest "
+                    "FROM task_event_aggregates WHERE task_id = ?;",
+                    (task_id,),
+                )
+                aggregate = cur.fetchone()
+                if aggregate is None:
+                    if expected_version != 0:
+                        raise ConcurrencyConflictError(
+                            f"CAS conflict for task {task_id!r}: aggregate does not exist"
+                        )
+                    existing_ids: set[str] = set()
+                    start_sequence = 0
+                else:
+                    current_version = int(aggregate["aggregate_version"])
+                    if current_version != expected_version:
+                        raise ConcurrencyConflictError(
+                            f"CAS conflict for task {task_id!r}: "
+                            f"expected version {expected_version}, found {current_version}"
+                        )
+                    cur.execute(
+                        "SELECT event_id, MAX(aggregate_sequence) AS max_seq "
+                        "FROM task_events WHERE task_id = ?;",
+                        (task_id,),
+                    )
+                    row = cur.fetchone()
+                    existing_ids = set()
+                    start_sequence = int(row["max_seq"] or 0) if row else 0
+                    if row:
+                        cur.execute(
+                            "SELECT event_id FROM task_events WHERE task_id = ?;",
+                            (task_id,),
+                        )
+                        existing_ids = {str(item["event_id"]) for item in cur.fetchall()}
+
+                new_events = [item for item in ordered if item["event_id"] not in existing_ids]
+                new_version = expected_version + len(new_events)
+                for offset, item in enumerate(new_events, start=1):
+                    cur.execute(
+                        """
+                        INSERT INTO task_events (
+                            event_id, task_id, aggregate_sequence, source_sequence,
+                            event_type, occurred_at, payload_json, payload_digest
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                        """,
+                        (
+                            item["event_id"],
+                            task_id,
+                            start_sequence + offset,
+                            int((item.get("source") or {}).get("sequence") or 0),
+                            item["type"],
+                            item["occurred_at"],
+                            json.dumps(item["payload"], ensure_ascii=False,
+                                       sort_keys=True, separators=(",", ":")),
+                            item["payload_digest"],
+                        ),
+                    )
+
+                last_event_id = (
+                    ordered[-1]["event_id"] if ordered
+                    else (aggregate["last_event_id"] if aggregate is not None else "")
+                )
+                if aggregate is None:
+                    cur.execute(
+                        """
+                        INSERT INTO task_event_aggregates (
+                            task_id, aggregate_version, last_event_id, event_log_digest
+                        ) VALUES (?, ?, ?, ?);
+                        """,
+                        (task_id, new_version, last_event_id or "", event_log_digest),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE task_event_aggregates
+                        SET aggregate_version = ?, last_event_id = ?, event_log_digest = ?
+                        WHERE task_id = ? AND aggregate_version = ?;
+                        """,
+                        (
+                            new_version, last_event_id or "", event_log_digest,
+                            task_id, expected_version,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise ConcurrencyConflictError(
+                            f"CAS conflict for task {task_id!r}: aggregate version changed"
+                        )
+
+                projection_json = json.dumps(
+                    projection, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if aggregate is None:
+                    cur.execute(
+                        """
+                        INSERT INTO task_projections (
+                            task_id, aggregate_version, projection_json,
+                            projection_digest, last_event_id, event_log_digest
+                        ) VALUES (?, ?, ?, ?, ?, ?);
+                        """,
+                        (
+                            task_id, new_version, projection_json, projection_digest,
+                            last_event_id or "", event_log_digest,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE task_projections
+                        SET aggregate_version = ?, projection_json = ?,
+                            projection_digest = ?, last_event_id = ?, event_log_digest = ?
+                        WHERE task_id = ? AND aggregate_version = ?;
+                        """,
+                        (
+                            new_version, projection_json, projection_digest,
+                            last_event_id or "", event_log_digest,
+                            task_id, expected_version,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise ConcurrencyConflictError(
+                            f"CAS conflict for task {task_id!r}: projection version changed"
+                        )
+                self._conn.commit()
+                return new_version
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def get_projection(self, task_id: str) -> dict | None:
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT aggregate_version, projection_json, projection_digest, "
+                "last_event_id, event_log_digest FROM task_projections WHERE task_id = ?;",
+                (task_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "task_id": task_id,
+            "aggregate_version": row["aggregate_version"],
+            "projection": json.loads(row["projection_json"]),
+            "projection_digest": row["projection_digest"],
+            "last_event_id": row["last_event_id"],
+            "event_log_digest": row["event_log_digest"],
+        }
+
+    def get_events(self, task_id: str) -> list[dict]:
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT event_id, aggregate_sequence, source_sequence, event_type, "
+                "occurred_at, payload_json, payload_digest FROM task_events "
+                "WHERE task_id = ? ORDER BY aggregate_sequence ASC;",
+                (task_id,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "event_id": row["event_id"],
+                "aggregate_sequence": row["aggregate_sequence"],
+                "source_sequence": row["source_sequence"],
+                "type": row["event_type"],
+                "occurred_at": row["occurred_at"],
+                "payload": json.loads(row["payload_json"]),
+                "payload_digest": row["payload_digest"],
+            }
+            for row in rows
+        ]
