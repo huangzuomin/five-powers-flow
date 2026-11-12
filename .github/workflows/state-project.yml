@@ -1,6 +1,10 @@
 name: FPF State Ledger Project
 
 on:
+  push:
+    paths:
+      - "packages/fpf_coordinator/dispatch/**"
+      - ".github/workflows/state-project.yml"
   workflow_dispatch:
     inputs:
       task_id:
@@ -44,13 +48,15 @@ jobs:
   project:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      FPF_TRIAL: ${{ github.event_name == 'push' && '1' || '0' }}
     steps:
       - name: Checkout trusted base
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.base_sha }}
+          ref: ${{ inputs.base_sha || github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: ${{ github.event_name == 'workflow_dispatch' }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -59,16 +65,20 @@ jobs:
       - name: Generate deterministic ledger candidate
         env:
           GH_TOKEN: ${{ github.token }}
+          FPF_TASK_ID: ${{ inputs.task_id || 'FPF2-G4-EVDEMO-01' }}
+          FPF_PROJECT_ID: ${{ inputs.project_id || 'FPF' }}
+          FPF_PR_NUMBER: ${{ inputs.pr_number || '0' }}
         run: |
           set -euo pipefail
           python -m packages.fpf_coordinator.dispatch.poller project \
             --repo "${{ github.repository }}" \
-            --task-id "${{ inputs.task_id }}" \
-            --project-id "${{ inputs.project_id }}" \
-            --pr-number "${{ inputs.pr_number }}" \
+            --task-id "$FPF_TASK_ID" \
+            --project-id "$FPF_PROJECT_ID" \
+            --pr-number "$FPF_PR_NUMBER" \
             --out packages/fpf_coordinator/dispatch/state-ledger.json \
             --event-log "event-log-${{ github.run_id }}.jsonl"
       - name: Commit ledger on an isolated branch
+        if: env.FPF_TRIAL == '0'
         id: commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,6 +95,7 @@ jobs:
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "base_sha=$(git rev-parse HEAD^)" >> "$GITHUB_OUTPUT"
       - name: Open gated projection PR
+        if: env.FPF_TRIAL == '0'
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.commit.outputs.branch }}

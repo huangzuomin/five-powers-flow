@@ -3,6 +3,10 @@ name: FPF State Ledger Reconcile
 on:
   schedule:
     - cron: "*/15 * * * *"
+  push:
+    paths:
+      - "packages/fpf_coordinator/dispatch/**"
+      - ".github/workflows/state-reconcile.yml"
   workflow_dispatch:
     inputs:
       task_id:
@@ -62,7 +66,7 @@ jobs:
           FPF_SOURCE_REF: ${{ inputs.source_ref || 'main' }}
         run: |
           set -euo pipefail
-          if [ "$FPF_SOURCE_REF" = "main" ]; then
+          if [ "$FPF_SOURCE_REF" = "main" ] && [ "${{ github.event_name }}" != "push" ]; then
             CHECK_NAME="fpf-state-ledger-audit"
           else
             CHECK_NAME="fpf-state-ledger-audit-trial"
