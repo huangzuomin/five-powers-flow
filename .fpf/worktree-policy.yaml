@@ -1,0 +1,12 @@
+# H2 worktree reclamation policy (protected path: changes go through GATE_PR).
+#
+# The file is the policy; the code carries the same values as defaults so that a
+# missing file is "frozen defaults", never "no rules".
+worktree_root: _worktrees
+archive_root: _reclaim-archive
+allowlist:
+  - .fpf-worktree.json
+  - .fpf-runtime/
+reclaim_grace_days: 3
+ledger_freshness_hours: 24
+ttl_default_days: 14
