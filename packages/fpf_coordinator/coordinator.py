@@ -37,7 +37,9 @@ HEX_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 # Mandatory evidence groups are aligned with EVIDENCE-SPEC §2.
 # Rework adds RED/Green proof to the Library baseline; API and Full-Stack
 # include environment, integration and browser evidence as appropriate.
-_LIB = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 29, 30, 31, 32}
+# EVID-35/36 make independent QA execute the implementation suite itself
+# (FINAL-B03): a Library verdict may not rest on the DEV's own test report.
+_LIB = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 29, 30, 31, 32, 35, 36}
 _API = _LIB | {11, 14, 15, 16, 17, 18, 19, 20}
 _FULL = _API | {21, 22, 23, 24}
 _REWORK = _LIB | {25, 26, 27, 28}

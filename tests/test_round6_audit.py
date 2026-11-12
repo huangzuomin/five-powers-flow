@@ -114,9 +114,9 @@ class TestSixthAudit(unittest.TestCase):
         line=next(x for x in (Path(__file__).resolve().parents[1]/"docs/EVIDENCE-SPEC.md")
                  .read_text(encoding="utf-8").splitlines()
                  if "PROFILE-LIBRARY" in x and x.startswith("|"))
-        for expected in ("A(01-04)","B(05-08)","C(09,10,12)","D(13)","H(29-32)","16 项"):
+        for expected in ("A(01-04)","B(05-08)","C(09,10,12)","D(13)","H(29-32)","I(35-36)","18 项"):
             self.assertIn(expected,line)
-        self.assertEqual(len(coordinator.REQUIRED_PROFILE_EVIDENCES["Library"]),16)
+        self.assertEqual(len(coordinator.REQUIRED_PROFILE_EVIDENCES["Library"]),18)
 
     def test_evidence_index_anchor_are_exporter_owned(self):
         with tempfile.TemporaryDirectory() as tmp:

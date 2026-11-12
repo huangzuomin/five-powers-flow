@@ -46,7 +46,7 @@ class TestRoundFive(unittest.TestCase):
 
     def test_37_full_stack_requires_browser_evidence(self):
         ids = coordinator.REQUIRED_PROFILE_EVIDENCES["Full-Stack"]
-        self.assertEqual(len(ids), 28)
+        self.assertEqual(len(ids), 30)
         self.assertTrue(all(f"EVID-{x:02d}" in ids for x in (21,22,23,24)))
         self.assertTrue(all(f"EVID-{x:02d}" in coordinator.REQUIRED_PROFILE_EVIDENCES["Rework"]
                             for x in (25,26,27,28)))
