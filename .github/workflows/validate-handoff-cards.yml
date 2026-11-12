@@ -27,7 +27,12 @@ jobs:
         run: python -m pip install jsonschema pyyaml
       - name: Restore trusted policy gate from base
         run: |
-          git checkout ${{ github.event.pull_request.base.sha }} -- packages/fpf_policy/
+          # The gate is the union of the review/card logic (packages/fpf_policy)
+          # and the evidence requirement table REQUIRED_PROFILE_EVIDENCES
+          # (packages/fpf_coordinator). Anchor both to base: otherwise a PR can
+          # raise its own bar (un-gateable) or silently lower it (self-weakening).
+          # If base lags main, rebase the branch; required checks run strict.
+          git checkout ${{ github.event.pull_request.base.sha }} -- packages/fpf_policy/ packages/fpf_coordinator/
       - name: Fail-closed GitHub-authenticated review and PR routing
         env:
           GH_TOKEN: ${{ github.token }}
