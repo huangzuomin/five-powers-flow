@@ -66,7 +66,7 @@ class FakeGitHub:
             message = self.tags.get(sha)
             return (200, {"message": message}) if message is not None else (404, {})
         if method == "GET" and "/git/matching-refs/" in path:
-            prefix = path.split("/git/matching-refs/", 1)[1]
+            prefix = "refs/" + path.split("/git/matching-refs/", 1)[1]
             with self._lock:
                 items = [
                     {"ref": ref, "object": value["object"]}
