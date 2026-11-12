@@ -28,3 +28,17 @@ probe_authorizations:
     expires_at: 2026-12-12T00:00:00Z
     inherits_r4_claim_exception: false
     cleanup: manual, separate authorization + ledger
+  - authorization_id: PA-230b07389a3ff7b2a7c09e306ad9b6eeb5ac22584b757c8441fcc1a635043ba5
+    probe_id: g4-probe-20261112-c
+    task_id: FPF2-G4-REDUCER-01
+    work_order: WO-20261112-g4-final-remediation
+    authorization_pr: 98
+    authorized_actors:
+      - fpf-qa-bot-huangzuomin[bot]
+      - huangzuomin
+    max_runs: 2
+    max_attempts: 6
+    max_window_seconds: 120
+    expires_at: 2026-12-12T00:00:00Z
+    inherits_r4_claim_exception: false
+    cleanup: manual, separate authorization + ledger
