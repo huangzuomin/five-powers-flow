@@ -57,7 +57,7 @@ class FakeGitHub:
                 self.refs[ref] = {"object": {"sha": payload["sha"], "type": "tag"}}
                 return 201, {"object": {"sha": payload["sha"]}}
         if method == "GET" and "/git/ref/" in path:
-            ref = path.split("/git/ref/", 1)[1]
+            ref = "refs/" + path.split("/git/ref/", 1)[1]
             with self._lock:
                 value = self.refs.get(ref)
             return (200, value) if value else (404, {"message": "Not Found"})
@@ -239,6 +239,9 @@ class SlotTests(unittest.TestCase):
 
 
 class ProbeRunTests(unittest.TestCase):
+    def test_probe_namespace_is_a_durable_tag_namespace(self) -> None:
+        self.assertTrue(PROBE_REF_PREFIX.startswith("refs/tags/"))
+
     def test_single_winner_and_strict_conflicts(self) -> None:
         client = FakeGitHub()
         probe_id = "g4-probe-20261112-a"

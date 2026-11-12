@@ -29,7 +29,10 @@ import yaml
 AUTH_SCHEMA = "fpf-probe-auth/v1"
 REQUEST_SCHEMA = "fpf-probe-request/v1"
 SLOT_SCHEMA = "fpf-probe-slot/v1"
-PROBE_REF_PREFIX = "refs/fpf-probe/"
+# GitHub accepts 201 for arbitrary ref namespaces such as ``refs/fpf-probe/``
+# but does not persist them.  Only refs/heads and refs/tags are durable, so the
+# probe namespace lives under refs/tags/ (the same primitive used by claims).
+PROBE_REF_PREFIX = "refs/tags/fpf-probe/"
 API_ROOT = "https://api.github.com"
 
 PROBE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{7,39}$")
@@ -336,8 +339,10 @@ class SlotConsumer:
         }
 
     def read_slot(self, name: str) -> dict[str, Any] | None:
+        # The Get-a-reference endpoint expects the short form without "refs/".
+        short = f"{self._prefix()}{name}".removeprefix("refs/")
         status, ref = self._client.call(
-            "GET", f"/repos/{self._client.repo}/git/ref/{self._prefix()}{name}",
+            "GET", f"/repos/{self._client.repo}/git/ref/{short}",
         )
         if status == 404:
             return None
