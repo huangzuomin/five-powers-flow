@@ -62,14 +62,34 @@ jobs:
           python-version: "3.11"
       - name: Install projector dependencies
         run: python -m pip install pyyaml
+      - name: Resolve the task and PR behind a push
+        if: env.FPF_TRIAL == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].number')
+          test -n "$PR"
+          TASK=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq .body | python -c "
+          import sys, yaml
+          from packages.fpf_coordinator.coordinator import extract_yaml_block
+          body = sys.stdin.read()
+          text = extract_yaml_block(body, 'POLICY_CHANGE') or extract_yaml_block(body, 'DEV_HANDOFF')
+          print(yaml.safe_load(text)['task_id'])
+          ")
+          echo "FPF_PR_NUMBER=$PR" >> "$GITHUB_ENV"
+          echo "FPF_TASK_ID=$TASK" >> "$GITHUB_ENV"
       - name: Generate deterministic ledger candidate
         env:
           GH_TOKEN: ${{ github.token }}
-          FPF_TASK_ID: ${{ inputs.task_id || 'FPF2-G4-EVDEMO-01' }}
-          FPF_PROJECT_ID: ${{ inputs.project_id || 'FPF' }}
-          FPF_PR_NUMBER: ${{ inputs.pr_number || '0' }}
+          INPUT_TASK_ID: ${{ inputs.task_id }}
+          INPUT_PROJECT_ID: ${{ inputs.project_id }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
+          FPF_TASK_ID="${INPUT_TASK_ID:-${FPF_TASK_ID:-FPF2-G4-EVDEMO-01}}"
+          FPF_PROJECT_ID="${INPUT_PROJECT_ID:-${FPF_PROJECT_ID:-FPF}}"
+          FPF_PR_NUMBER="${INPUT_PR_NUMBER:-${FPF_PR_NUMBER:-0}}"
           python -m packages.fpf_coordinator.dispatch.poller project \
             --repo "${{ github.repository }}" \
             --task-id "$FPF_TASK_ID" \

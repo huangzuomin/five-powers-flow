@@ -57,15 +57,37 @@ jobs:
           python-version: "3.11"
       - name: Install projector dependencies
         run: python -m pip install pyyaml
+      - name: Resolve the task and PR behind a push
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].number')
+          test -n "$PR"
+          TASK=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq .body | python -c "
+          import sys, yaml
+          from packages.fpf_coordinator.coordinator import extract_yaml_block
+          body = sys.stdin.read()
+          text = extract_yaml_block(body, 'POLICY_CHANGE') or extract_yaml_block(body, 'DEV_HANDOFF')
+          print(yaml.safe_load(text)['task_id'])
+          ")
+          echo "FPF_PR_NUMBER=$PR" >> "$GITHUB_ENV"
+          echo "FPF_TASK_ID=$TASK" >> "$GITHUB_ENV"
+          echo "replaying PR #$PR for task $TASK"
       - name: Replay GitHub facts and compare the committed ledger
         env:
           GH_TOKEN: ${{ github.token }}
-          FPF_TASK_ID: ${{ inputs.task_id || 'FPF2-G4-EVDEMO-01' }}
-          FPF_PROJECT_ID: ${{ inputs.project_id || 'FPF' }}
-          FPF_PR_NUMBER: ${{ inputs.pr_number || '0' }}
-          FPF_SOURCE_REF: ${{ inputs.source_ref || github.sha }}
+          INPUT_TASK_ID: ${{ inputs.task_id }}
+          INPUT_PROJECT_ID: ${{ inputs.project_id }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
+          FPF_TASK_ID="${INPUT_TASK_ID:-${FPF_TASK_ID:-FPF2-G4-EVDEMO-01}}"
+          FPF_PROJECT_ID="${INPUT_PROJECT_ID:-${FPF_PROJECT_ID:-FPF}}"
+          FPF_PR_NUMBER="${INPUT_PR_NUMBER:-${FPF_PR_NUMBER:-0}}"
+          FPF_SOURCE_REF="${INPUT_SOURCE_REF:-${FPF_SOURCE_REF:-$GITHUB_SHA}}"
           # Only a scheduled run, or an explicit dispatch of main, may publish the
           # authoritative audit. Anything replaying another commit is a trial and
           # is labelled as such, so branch code can never masquerade as the audit.
