@@ -87,6 +87,25 @@
       "pytest",
       "-q",
       "tests/standards/test_standard_2_0.py"
+    ],
+    "EVID-35": [
+      "python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-p",
+      "test_*.py"
+    ],
+    "EVID-36": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_probe_governance.py",
+      "tests/test_gate_doc_profile.py",
+      "tests/test_gates.py"
     ]
   },
   "expected_exit_codes": {
@@ -103,6 +122,8 @@
     "EVID-12": 0,
     "EVID-13": 0,
     "EVID-29": 0,
-    "EVID-30": 0
+    "EVID-30": 0,
+    "EVID-35": 0,
+    "EVID-36": 0
   }
 }
