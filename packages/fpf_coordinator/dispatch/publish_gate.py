@@ -28,6 +28,7 @@ from .fact_source import (
     FactSourceError,
     canonical_bytes,
     compare_event_log,
+    compare_event_sequence,
     sha256_hex,
     stable_observation,
 )
@@ -235,6 +236,7 @@ def trusted_replay(events: list[Mapping[str, Any]], task_id: str, project_id: st
     return {
         "task": dict(reduction.projection),
         "event_ids": list(reduction.event_ids),
+        "ordered_ids": [event.event_id for event in reduction.ordered_events],
         "event_log_digest": reduction.event_log_digest,
     }
 
@@ -328,6 +330,10 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     compare_event_log(list(observation.events), artifact["events"])
 
     replay = trusted_replay(artifact["events"], task_id, args.project_id)
+    compare_event_sequence(
+        replay["ordered_ids"],
+        [str(event.get("event_id") or "") for event in artifact["events"]],
+    )
     compare_projection(replay["task"], artifact["ledger"])
 
     stale_base(manifest, _read_json(args.target, STALE_BASE))

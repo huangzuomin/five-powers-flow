@@ -11,13 +11,16 @@ from packages.fpf_coordinator.dispatch.fact_source import (
     EVENT_SOURCE_UNAVAILABLE,
     EVENT_SOURCE_SNAPSHOT_DRIFT,
     EVENT_COUNT_MISMATCH,
+    EVENT_DUPLICATE_MISMATCH,
     EVENT_FIELD_MISMATCH,
     EVENT_ID_MISMATCH,
+    EVENT_ORDER_MISMATCH,
     RETRY_ROUNDS,
     PassSnapshot,
     canonical_bytes,
     collect_endpoint,
     compare_event_log,
+    compare_event_sequence,
     compare_passes,
     sha256_hex,
     stable_observation,
@@ -99,6 +102,85 @@ class EventLogCompareTests(unittest.TestCase):
     def test_identical_logs_pass(self) -> None:
         events = [{"event_id": "a", "type": "X"}]
         compare_event_log(events, list(events))
+
+
+class EventSequenceTests(unittest.TestCase):
+    """FINAL-B02: order and multiplicity are part of the fact."""
+
+    def test_same_order_passes(self) -> None:
+        compare_event_sequence(["a", "b", "c"], ["a", "b", "c"])
+
+    def test_same_set_different_order_is_rejected(self) -> None:
+        with self.assertRaises(FactSourceError) as ctx:
+            compare_event_sequence(["a", "b", "c"], ["a", "c", "b"])
+        self.assertEqual(ctx.exception.code, EVENT_ORDER_MISMATCH)
+
+    def test_reversed_order_is_rejected(self) -> None:
+        with self.assertRaises(FactSourceError) as ctx:
+            compare_event_sequence(["a", "b"], ["b", "a"])
+        self.assertEqual(ctx.exception.code, EVENT_ORDER_MISMATCH)
+
+    def test_duplicate_multiplicity_is_rejected(self) -> None:
+        with self.assertRaises(FactSourceError) as ctx:
+            compare_event_sequence(["a", "a", "b"], ["a", "b", "b"])
+        self.assertEqual(ctx.exception.code, EVENT_ORDER_MISMATCH)
+
+    def test_extra_duplicate_is_rejected(self) -> None:
+        with self.assertRaises(FactSourceError) as ctx:
+            compare_event_sequence(["a", "b"], ["a", "b", "b"])
+        self.assertEqual(ctx.exception.code, EVENT_COUNT_MISMATCH)
+
+
+class CollectionBindingTests(unittest.TestCase):
+    """FINAL-B01: events must come from the pages that produced the forensics."""
+
+    def test_events_are_built_from_the_collected_pages(self) -> None:
+        original_snapshot = fact_source._pr_snapshot
+        original_collect = fact_source.collect_endpoint
+        original_build = fact_source.build_events_from_bundle
+        pr = {"number": 1, "head": {"sha": "a" * 40}, "base": {"sha": "b" * 40}}
+
+        fact_source._pr_snapshot = lambda repo, pr_number, token: (
+            {"head_sha": "a" * 40, "base_sha": "b" * 40, "state": "open",
+             "merged": False, "updated_at": "x", "digest": "d" * 64},
+            pr,
+        )
+        pages = {
+            "pulls/1/reviews": [{"id": 11}],
+            "commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs": [{"id": 22}],
+            "actions/runs?head_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [{"id": 33}],
+        }
+        seen: dict[str, object] = {}
+
+        def fake_collect(repo, endpoint, token, *, pass_no, source_object, items_key=None):
+            return list(pages[endpoint]), [{
+                "pass": pass_no, "endpoint": endpoint, "page": 1,
+                "count": len(pages[endpoint]),
+                "first_event_id": "", "last_event_id": "",
+                "page_sha256": "0" * 64, "collected_at": "2026-01-01T00:00:00Z",
+                "_object_ids": [f"{source_object}:{item['id']}" for item in pages[endpoint]],
+            }]
+
+        class FakeBatch:
+            ordered_events = ()
+            complete = True
+
+        def fake_build(repo, bundle, task_id, project_id):
+            seen["bundle"] = bundle
+            return FakeBatch()
+
+        fact_source.collect_endpoint = fake_collect
+        fact_source.build_events_from_bundle = fake_build
+        try:
+            snapshot = fact_source.collect_pass("o/r", 1, "T", "P", "tok", 1)
+        finally:
+            fact_source._pr_snapshot = original_snapshot
+            fact_source.collect_endpoint = original_collect
+            fact_source.build_events_from_bundle = original_build
+        bundle = seen["bundle"]
+        self.assertEqual(bundle["pr"], pr)
+        self.assertEqual(bundle["reviews"], pages["pulls/1/reviews"])
+        self.assertEqual(len(snapshot.pages), 3)
 
 
 class PaginationTests(unittest.TestCase):

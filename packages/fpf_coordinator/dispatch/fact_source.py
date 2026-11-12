@@ -15,11 +15,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections import Counter
 import hashlib
 import json
 from typing import Any, Mapping, Sequence
 
-from .github_source import GitHubSourceError, _request, build_events_from_pr
+from .github_source import GitHubSourceError, _request, build_events_from_bundle
 
 PAGE_SIZE = 100
 MAX_PAGES = 100
@@ -34,6 +35,8 @@ EVENT_ID_MISMATCH = "EVENT_ID_MISMATCH"
 EVENT_FIELD_MISMATCH = "EVENT_FIELD_MISMATCH"
 EVENT_ATTRIBUTION_MISMATCH = "EVENT_ATTRIBUTION_MISMATCH"
 PR_SNAPSHOT_DRIFT = "PR_SNAPSHOT_DRIFT"
+EVENT_ORDER_MISMATCH = "EVENT_ORDER_MISMATCH"
+EVENT_DUPLICATE_MISMATCH = "EVENT_DUPLICATE_MISMATCH"
 
 
 class FactSourceError(RuntimeError):
@@ -111,7 +114,9 @@ def collect_endpoint(
     )
 
 
-def _pr_snapshot(repo: str, pr_number: int, token: str) -> dict[str, Any]:
+def _pr_snapshot(
+    repo: str, pr_number: int, token: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         pr = _request(repo, f"pulls/{int(pr_number)}", token)
     except GitHubSourceError as exc:
@@ -126,7 +131,7 @@ def _pr_snapshot(repo: str, pr_number: int, token: str) -> dict[str, Any]:
         "updated_at": str(pr.get("updated_at") or ""),
     }
     snapshot["digest"] = sha256_hex(canonical_bytes(snapshot))
-    return snapshot
+    return snapshot, pr
 
 
 def _canonical_events(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -218,23 +223,34 @@ def collect_pass(
     token: str,
     pass_no: int,
 ) -> PassSnapshot:
-    before = _pr_snapshot(repo, pr_number, token)
+    before, pr = _pr_snapshot(repo, pr_number, token)
     if not before["head_sha"]:
         raise FactSourceError(EVENT_SOURCE_UNAVAILABLE, "pull head sha")
     pages: list[dict[str, Any]] = []
-    for endpoint, source_object, items_key in (
-        (f"pulls/{int(pr_number)}/reviews", "review", None),
-        (f"issues/{int(pr_number)}/comments", "issue_comment", None),
-        (f"actions/runs?head_sha={before['head_sha']}", "workflow_run", "workflow_runs"),
-        (f"commits/{before['head_sha']}/check-runs", "check_run", "check_runs"),
+    collected: dict[str, list[dict[str, Any]]] = {}
+    for key, endpoint, source_object, items_key in (
+        ("reviews", f"pulls/{int(pr_number)}/reviews", "review", None),
+        ("check_runs", f"commits/{before['head_sha']}/check-runs", "check_run", "check_runs"),
+        ("workflow_runs", f"actions/runs?head_sha={before['head_sha']}", "workflow_run", "workflow_runs"),
     ):
-        _, records = collect_endpoint(
+        items, records = collect_endpoint(
             repo, endpoint, token, pass_no=pass_no,
             source_object=source_object, items_key=items_key,
         )
+        collected[key] = items
         pages.extend(records)
     try:
-        batch = build_events_from_pr(repo, int(pr_number), task_id, project_id, token)
+        batch = build_events_from_bundle(
+            repo,
+            {
+                "pr": pr,
+                "reviews": collected["reviews"],
+                "check_runs": collected["check_runs"],
+                "workflow_runs": collected["workflow_runs"],
+            },
+            task_id,
+            project_id,
+        )
     except GitHubSourceError as exc:
         raise FactSourceError(EVENT_SOURCE_UNAVAILABLE, str(exc)) from exc
     events = _canonical_events([event.to_dict() for event in batch.ordered_events])
@@ -242,7 +258,7 @@ def collect_pass(
     if conflicts:
         raise FactSourceError(EVENT_ID_CONFLICT, ",".join(conflicts[:5]))
     _attribute_pages(events, pages)
-    after = _pr_snapshot(repo, pr_number, token)
+    after, _ = _pr_snapshot(repo, pr_number, token)
     if before["head_sha"] != after["head_sha"] or before["base_sha"] != after["base_sha"]:
         raise FactSourceError(PR_SNAPSHOT_DRIFT, "pr shas changed during collection")
     return PassSnapshot(
@@ -336,3 +352,19 @@ def compare_event_log(
         event_id = str(event.get("event_id") or "")
         if canonical_bytes(index[event_id]) != canonical_bytes(dict(event)):
             raise FactSourceError(EVENT_FIELD_MISMATCH, event_id)
+
+
+def compare_event_sequence(
+    trusted_ids: Sequence[str], candidate_ids: Sequence[str],
+) -> None:
+    """FINAL-B02: order and multiplicity are part of the fact, not a set."""
+    left, right = list(trusted_ids), list(candidate_ids)
+    if len(left) != len(right):
+        raise FactSourceError(EVENT_COUNT_MISMATCH, f"{len(left)}!={len(right)}")
+    for index, (a, b) in enumerate(zip(left, right)):
+        if a != b:
+            raise FactSourceError(
+                EVENT_ORDER_MISMATCH, f"index {index}: {a[:12]}!={b[:12]}",
+            )
+    if Counter(left) != Counter(right):
+        raise FactSourceError(EVENT_DUPLICATE_MISMATCH, "multiplicity differs")

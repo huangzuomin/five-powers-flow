@@ -85,7 +85,11 @@ def _pages(repo: str, endpoint: str, token: str,
             data = data[items_key]
         if not isinstance(data, list):
             raise GitHubSourceError(f"Expected a list from {endpoint}")
-        result.extend(item for item in data if isinstance(item, dict))
+        for item in data:
+            if not isinstance(item, dict):
+                raise GitHubSourceError(
+                    f"Malformed non-object record in {endpoint} page {page}")
+            result.append(item)
         if len(data) < 100:
             return result
     raise GitHubSourceError(f"Pagination exceeded safe bound for {endpoint}")
@@ -202,10 +206,9 @@ def fetch_pr_bundle(repo: str, pr_number: int, token: str) -> dict[str, Any]:
     if not re.fullmatch(r"[a-f0-9]{40}", head_sha):
         raise GitHubSourceError("Pull request head SHA is missing or invalid")
     reviews = _pages(repo, f"pulls/{int(pr_number)}/reviews", token)
-    check_runs: list[dict] = []
-    checks = _request(repo, f"commits/{head_sha}/check-runs?per_page=100", token)
-    if isinstance(checks, dict) and isinstance(checks.get("check_runs"), list):
-        check_runs = [item for item in checks["check_runs"] if isinstance(item, dict)]
+    # R11/FINAL-B01: check-runs must be fully paginated, not truncated at one page.
+    check_runs = _pages(repo, f"commits/{head_sha}/check-runs", token,
+                        items_key="check_runs")
     workflows = _pages(repo, f"actions/runs?head_sha={head_sha}", token,
                        items_key="workflow_runs")
     return {
@@ -236,16 +239,20 @@ def find_pr_for_task(repo: str, task_id: str, token: str) -> int:
     return int(candidates[0]["number"])
 
 
-def build_events_from_pr(
+def build_events_from_bundle(
     repo: str,
-    pr_number: int,
+    bundle: Mapping[str, Any],
     task_id: str,
     project_id: str,
-    token: str,
 ) -> EventBatch:
-    """Normalize authenticated GitHub facts into the closed Task Event stream."""
-    bundle = fetch_pr_bundle(repo, pr_number, token)
+    """Normalize an already-collected bundle into the closed Task Event stream.
+
+    FINAL-B01: the publish gate must derive events from the *same* raw pages it
+    recorded forensics for.  Normalising from a second, independent refetch made
+    "stable page digests" and "stable event set" two unrelated observations.
+    """
     pr = bundle["pr"]
+    pr_number = int(pr.get("number") or 0)
     head_sha = str((pr.get("head") or {}).get("sha") or "").lower()
     base_sha = str((pr.get("base") or {}).get("sha") or "").lower()
     created_at = _time(pr.get("created_at"), "1970-01-01T00:00:00Z")
@@ -500,6 +507,18 @@ def build_events_from_pr(
         complete=complete and not refusals,
         refusals=tuple(refusals),
     )
+
+
+def build_events_from_pr(
+    repo: str,
+    pr_number: int,
+    task_id: str,
+    project_id: str,
+    token: str,
+) -> EventBatch:
+    """Normalize authenticated GitHub facts into the closed Task Event stream."""
+    bundle = fetch_pr_bundle(repo, pr_number, token)
+    return build_events_from_bundle(repo, bundle, task_id, project_id)
 
 
 def main_tip(repo: str, token: str) -> str:
